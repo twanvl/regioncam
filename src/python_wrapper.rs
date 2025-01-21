@@ -6,7 +6,9 @@ use crate::partition::Partition;
 
 #[pymodule(name = "regioncam")]
 mod regioncam {
-    use std::fs::File;
+    use std::{fs::File, ops::Range};
+
+    use pyo3::types::PyList;
 
     use crate::{partition::Face, svg::SvgOptions};
 
@@ -56,10 +58,35 @@ mod regioncam {
         fn vertices<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
             self.partition.inputs().to_pyarray(py)
         }
-        /// The output values for all vertices.
+        /// The output values / activations in the last layer, for all vertices.
         #[getter]
         fn vertex_outputs<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
             self.partition.activations_last().to_pyarray(py)
+        }
+        /// The output values /  for all vertices, at a given layer
+        fn vertex_outputs_at<'py>(&self, py: Python<'py>, layer: usize) -> Bound<'py, PyArray2<f32>> {
+            self.partition.activations(layer).to_pyarray(py)
+        }
+
+        /// The output values for all faces.
+        /// A point x in face f has output value  [x[0],x[1],1] @ face_outputs[f]
+        #[getter]
+        fn face_outputs<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray3<f32>> {
+            self.partition.face_activations().to_pyarray(py)
+        }
+        fn face_outputs_at<'py>(&self, py: Python<'py>, layer: usize) -> Bound<'py, PyArray3<f32>> {
+            self.partition.face_activations_at(layer).to_pyarray(py)
+        }
+
+        /// List of face objects
+        #[getter]
+        fn faces<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+            PyList::new(py, self.partition.faces().map(PyFace))
+        }
+        /// List of vertex ids in a face
+        fn face_vertex_ids<'py>(&self, face: Bound<'py, PyFace>) -> Vec<usize> {
+            let face = face.borrow().0;
+            self.partition.vertices_on_face(face).map(usize::from).collect()
         }
 
         #[pyo3(signature=(path, *, size=None, line_width=None))]
@@ -96,4 +123,6 @@ mod regioncam {
         }
     }
 
+    #[pyclass(name="Face")]
+    struct PyFace(Face);
 }

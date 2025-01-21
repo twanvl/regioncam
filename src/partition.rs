@@ -1,7 +1,7 @@
 // This module defines a halfedge data structure for partitioning 2d space.
 
 use std::fmt::Debug;
-use ndarray::{array, s, Array, Array2, Array3, ArrayView, ArrayView1, ArrayView2, ArrayViewMut2, Axis, Dimension, NewAxis};
+use ndarray::{array, s, Array, Array2, Array3, ArrayView, ArrayView1, ArrayView2, ArrayView3, ArrayViewMut2, Axis, Dimension, NewAxis};
 
 use crate::util::{leaky_relu, relu};
 
@@ -268,6 +268,12 @@ impl Partition {
     pub fn vertex_inputs(&self, vertex: Vertex) -> ArrayView1<f32> {
         self.vertex_data[0].row(vertex.0)
     }
+    pub fn face_activations_at(&self, layer: usize) -> ArrayView3<f32> {
+        self.face_data[layer].view()
+    }
+    pub fn face_activations(&self) -> ArrayView3<f32> {
+        self.face_activations_at(self.last_layer())
+    }
 
     pub fn opposite(&self, he: Halfedge) -> Halfedge {
         he.opposite()
@@ -319,6 +325,9 @@ impl Partition {
     }
     pub fn halfedges_on_face(&self, face: Face) -> HalfedgesOnFace<'_> {
         HalfedgesOnFace::new(self.halfedge_on_face(face), &self.he_next)
+    }
+    pub fn vertices_on_face(&self, face: Face) -> impl '_ + Iterator<Item=Vertex> {
+        self.halfedges_on_face(face).map(|he| self.start(he))
     }
 
     // Invariants
