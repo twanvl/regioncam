@@ -3,6 +3,7 @@ use rand::Rng;
 use rand_distr::{Distribution, Normal, Uniform};
 
 use crate::partition::*;
+use crate::util::*;
 
 pub trait IsModule {
     fn apply(&self, p: &mut Partition);
@@ -41,7 +42,7 @@ impl Linear {
 
 impl IsModule for Linear {
     fn apply(&self, p: &mut Partition) {
-        p.linear_transform(&self.weight.view(), &self.bias.view());
+        p.linear(&self.weight.view(), &self.bias.view());
     }
 
     fn forward(&self, x: &ArrayView2<f32>) -> Array2<f32> {
@@ -70,6 +71,7 @@ pub enum Module {
     Identity,
     Linear(Linear),
     ReLU,
+    LeakyReLU(f32),
     Sequential(Vec<Module>),
     Residual(Vec<Module>),
 }
@@ -81,9 +83,10 @@ impl IsModule for Module {
             Identity => (),
             Linear(module) => module.apply(p),
             ReLU => p.relu(),
+            LeakyReLU(factor) => p.leaky_relu(*factor),
             Sequential(module) => module.apply(p),
             Residual(module) => {
-                let layer = p.num_layers() - 1;
+                let layer = p.last_layer();
                 module.apply(p);
                 p.residual(layer);
             },
@@ -96,6 +99,7 @@ impl IsModule for Module {
             Identity => x.into_owned(),
             Linear(module) => module.forward(x),
             ReLU => relu(x),
+            LeakyReLU(factor) => leaky_relu(x, *factor),
             Sequential(module) => module.forward(x),
             Residual(module) => x + module.forward(x),
         }

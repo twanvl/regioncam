@@ -3,21 +3,7 @@
 use std::fmt::Debug;
 use ndarray::{array, s, Array, Array2, Array3, ArrayView, ArrayView1, ArrayView2, ArrayViewMut2, Axis, Dimension, NewAxis};
 
-/*
-// A partition of 2d space
-struct Partition {
-  vertices: Vec<Float[2]>,
-  vertices_out: Array2<f32>,
-  face_verts: Vec<usize>,
-  face_starts: Vec<usize>,
-}
-
-type Vertex   = usize;
-type Halfedge = usize;
-type Edge     = usize; // even
-const NONE = Halfedge::MAX;
-type OptHalfedge = Option<NonMaxUsize>;
-*/
+use crate::util::{leaky_relu, relu};
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Vertex(usize);
@@ -137,34 +123,53 @@ impl Debug for OptFace {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum LayerFaceMask {
+    NoMask,
+    ReLU(Array2<bool>),
+    LeakyReLU(Array2<bool>, f32),
+    //Max(Array2<usize>),
+}
+enum LayerType {
+    Input,
+    ReLU,
+    LeakyReLU(f32),
+    Linear,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EdgeLabel {
+    /// Layer on which this edge was introduced
+    layer: usize,
+    /// Dimension of that layer which caused this edge to be created
+    dim: usize,
+}
+
+impl Default for EdgeLabel {
+    fn default() -> Self {
+        Self { layer: Default::default(), dim: Default::default() }
+    }
+}
+
 /// A partition of 2d space.
 /// Stored as a half-edge data structure
 #[derive(Debug, Clone, PartialEq)]
 pub struct Partition {
-    //vertex_in:   Array2<f32>, // vertex -> f32[2]
-    //vertex_out:  Array2<f32>, // vertex -> f32[D]
-    //vertex_data: Array2<f32>, // vertex -> f32[D]
     /// Data associated with vertices.
     /// This is the output of layer l in the neural network.
     vertex_data: Vec<Array2<f32>>, // layer -> vertex -> f32[D_l]
-    /// For each ReLU layer, for each vertex: a mask indicating which dimensions are non-negative
-    // vertex_mask_data: Vec<Array2<u64>>, // layer -> vertex -> mask of non-negative dimensions
-    // grouped by face
-    /*
-    he_vertex:   Vec<Vertex>,    // halfedge -> vertex
-    face_start:  Vec<Halfedge>,  // face -> first halfedge
-    face_end:    Vec<Halfedge>,  // face -> after last halfedge
-    opposite:    Vec<Option<Halfedge>>, // halfedge -> halfedge
-    face_split:  Vec<usize>, // 
-    */
-    // grouped by halfedge
+
     face_data:  Vec<Array3<f32>>,  // layer -> face -> f32[D_in, D_F]
     face_he:    Vec<Halfedge>,     // face -> halfedge
+    /// For each (ReLU) layer, for each face: a mask indicating which dimensions are non-negative
+    //face_mask:  Vec<LayerMask>,    // layer -> face -> mask of non-negative dimensions
+
     he_vertex:  Vec<Vertex>,       // halfedge -> vertex
     he_face:    Vec<OptFace>,      // halfedge -> face or NONE
     he_next:    Vec<Halfedge>,     // halfedge -> halfedge
     he_prev:    Vec<Halfedge>,     // halfedge -> halfedge
-    //edge_label: Vec<Label>, // edge -> label
+    
+    edge_label: Vec<EdgeLabel>,    // edge -> label
 }
 
 // Append to the array the element
@@ -179,7 +184,7 @@ fn append_lerp(arr: &mut Array2<f32>, i: usize, j: usize, t: f32) -> usize {
     return k;
 }
 
-/// Find the point t at which a+t*(b-a) == 0
+/// Find the point t between 0.0 and 1.0 at which a+t*(b-a) == 0
 fn find_zero(a: f32, b: f32) -> Option<f32> {
     if (a < 0.0) == (b < 0.0) {
         None
@@ -193,11 +198,6 @@ fn find_zero(a: f32, b: f32) -> Option<f32> {
         Some(t)
     }
 }
-
-pub(crate) fn relu<D: Dimension>(arr: &ArrayView<f32, D>) -> Array<f32, D> {
-    arr.map(|x| x.max(0.0))
-}
-
 impl Partition {
 
     // Constructors
@@ -213,11 +213,13 @@ impl Partition {
                 [0.0, 1.0],
                 [0.0, 0.0],
             ]]],
+            //face_mask: vec![LayerMask::NoMask],
             face_he:   vec![Halfedge(0)],
             he_face:   Vec::from_iter((0..n).flat_map(|_| [OptFace(0), OptFace::NONE])),
             he_vertex: Vec::from_iter((0..n).flat_map(|i| [Vertex(i), Vertex((i+1) % n)])),
             he_next:   Vec::from_iter((0..n).flat_map(|i| [Halfedge(2*((i+1)%n)), Halfedge(2*((i+n-1)%n)+1)])),
             he_prev:   Vec::from_iter((0..n).flat_map(|i| [Halfedge(2*((i+n-1)%n)), Halfedge(2*((i+1)%n)+1)])),
+            edge_label: vec![EdgeLabel::default(); n],
         }
     }
     /// Construct a partition with a single rectangle
@@ -250,6 +252,9 @@ impl Partition {
     }
     pub fn num_layers(&self) -> usize {
         self.vertex_data.len()
+    }
+    pub fn last_layer(&self) -> usize {
+        self.num_layers() - 1
     }
     pub fn activations(&self, layer: usize) -> ArrayView2<f32> {
         self.vertex_data[layer].view()
@@ -336,6 +341,7 @@ impl Partition {
         assert_eq!(self.he_face.len(), self.num_halfedges());
         assert_eq!(self.he_next.len(), self.num_halfedges());
         assert_eq!(self.he_prev.len(), self.num_halfedges());
+        assert_eq!(!self.edge_label.len(), self.num_edges());
         // all indices in the vectors are valid
         for he in &self.face_he {
             assert!(he.0 < self.num_halfedges());
@@ -422,7 +428,7 @@ impl Partition {
 
     /// Split a face by adding an edge between the start vertices of a and b.
     /// A new face is inserted for the loop start(a)...start(b).
-    pub fn split_face(&mut self, a: Halfedge, b: Halfedge) -> Face {
+    pub fn split_face(&mut self, a: Halfedge, b: Halfedge, edge_label: EdgeLabel) -> Face {
         let face = self.optface(a);
         assert!(self.face(a).is_some(), "Cannot split the outside face");
         assert_eq!(self.face(a), self.face(b));
@@ -450,6 +456,7 @@ impl Partition {
         self.he_prev.extend_from_slice(&[ap, bp]);
         self.he_prev[a.0] = new_edge.halfedge(1);
         self.he_prev[b.0] = new_edge.halfedge(0);
+        self.edge_label.push(edge_label);
         // add face
         let new_face = Face(self.num_faces());
         for face_data in self.face_data.iter_mut() {
@@ -470,7 +477,7 @@ impl Partition {
     /// Split all faces in the partition by treating zeros of a function as edges.
     /// Requires that there is at most 1 zero crossing per edge.
     /// The function split(a,b) should return Some(t) if f(lerp(a,b,t)) == 0
-    fn split_by<Split>(&mut self, split: Split)
+    fn split_by<Split>(&mut self, split: Split, edge_label: EdgeLabel)
         where Split: Fn(&Self, Vertex, Vertex) -> Option<f32>
     {
         // Split edges such that all zeros of the function go through vertices.
@@ -501,31 +508,31 @@ impl Partition {
                     if let Some(he2) = iter.find(|he| zero_vertices[self.start(*he).0]) {
                         // TODO: handle case where he2 is consecutive to more zeros and to he1.
                         // This can only happen when there are multiple vertices in a line.
-                        self.split_face(he1, he2);
+                        self.split_face(he1, he2, edge_label);
                     }
                 }
             }
         }
     }
 
-    // Neural network operations
-    
-    /// Update partition by adding a ReLU layer
-    /// This means:
-    ///  * split all faces at activation[l,_,d]=0 for any dim d
-    ///  * set activation[l+1] = max(0,activation[l])
-    pub fn relu(&mut self) {
+    /// Split all faces in the partition by treating zeros of the given layer as edges.
+    /// Return a mask for every face where 1 is a positive face, 0 is a negative face
+    fn split_by_zero_at(&mut self, layer: usize) {
         // Split faces on activation = 0
-        let acts: ndarray::ArrayBase<ndarray::ViewRepr<&f32>, ndarray::Dim<[usize; 2]>> = self.activations_last();
+        let acts = self.activations(layer);
         for dim in 0..acts.len_of(Axis(1)) {
+            let edge_label = EdgeLabel { layer: self.num_layers(), dim };
             self.split_by(|slf, a, b| {
                 let acts = slf.activations_last();
                 find_zero(acts[[a.0, dim]], acts[[b.0, dim]])
-            });
+            }, edge_label);
         }
-        // Compute mask of non-negative dimensions for each face,
-        // the mask is true iff all vertices are non-negative
-        let acts = self.activations_last();
+    }
+
+    /// Compute mask of non-negative dimensions for each face,
+    /// The mask is true iff all vertices of the face are non-negative
+    fn non_negative_face_mask(&self, layer: usize) -> Array2<bool> {
+        let acts = self.activations(layer);
         let mut mask = Array2::<bool>::default((self.num_faces(), acts.ncols()));
         for he in self.halfedges() {
             if let Some(face) = self.face(he) {
@@ -534,28 +541,60 @@ impl Partition {
                 );
             }
         }
+        mask
+    }
+
+    // Neural network operations
+    
+    /// Update partition by adding a ReLU layer, that takes as input the output of the given layer.
+    pub fn relu_at(&mut self, layer: usize) {
+        // Split faces
+        self.split_by_zero_at(layer);
+        let face_mask = self.non_negative_face_mask(layer);
         // Compute relu output for vertices
+        let acts = self.vertex_data[layer].view();
         let new_vertex_data = relu(&acts);
         self.vertex_data.push(new_vertex_data);
         // Apply mask to compute per-face activation
-        let mut face_data = self.face_data.last().unwrap().clone();
-        face_data.zip_mut_with(&mask.slice(s![.., NewAxis, ..]), |x, m| if !m { *x = 0.0; });
+        let mut face_data = self.face_data[layer].clone();
+        face_data.zip_mut_with(&face_mask.slice(s![.., NewAxis, ..]), |x, m| if !m { *x = 0.0; });
         self.face_data.push(face_data);
+    }
+    /// Update partition by adding a ReLU layer
+    /// This means:
+    ///  * split all faces at activation[l,_,d]=0 for any dim d
+    ///  * set activation[l+1] = max(0,activation[l])
+    pub fn relu(&mut self) {
+        self.relu_at(self.last_layer());
+    }
+
+    pub fn leaky_relu_at(&mut self, layer: usize, factor: f32) {
+        self.split_by_zero_at(layer);
+        let face_mask = self.non_negative_face_mask(layer);
+        // Compute leaky relu output for vertices
+        self.vertex_data.push(leaky_relu(&self.vertex_data[layer].view(), factor));
+        // Apply mask to compute per-face activation
+        let mut face_data = self.face_data[layer].clone();
+        face_data.zip_mut_with(&face_mask.slice(s![.., NewAxis, ..]), |x, m| if !m { *x *= factor; });
+        self.face_data.push(face_data);
+    }
+    pub fn leaky_relu(&mut self, factor: f32) {
+        self.leaky_relu_at(self.last_layer(), factor);
     }
 
     /// Append a layer that computes output using the given function.
     /// The function should be linear, without a bias term.
     /// Then `add_bias` should add the bias term
-    pub fn add_layer(&mut self, fun: impl Fn(ArrayView2<f32>) -> Array2<f32>, add_bias: impl Fn(ArrayViewMut2<f32>)) {
+    pub fn generalized_linear_at(&mut self, layer: usize, fun: impl Fn(ArrayView2<f32>) -> Array2<f32>, add_bias: impl Fn(ArrayViewMut2<f32>)) {
         // Compute vertex data (x' = x*w + b)
-        let mut vertex_data = fun(self.activations_last());
+        let mut vertex_data = fun(self.vertex_data[layer].view());
         add_bias(vertex_data.view_mut());
         self.vertex_data.push(vertex_data);
         // Compute new face_data:
         // If old was x = p*u + v,
         //  new is x' = x*w + b = p*(u*w) + (v*w + b)
         // Where v is face_data[..,2,..]
-        let face_data = self.face_data.last().unwrap();
+        let face_data = &self.face_data[layer];
         let (a,b,c) = face_data.dim();
         let face_data2 = face_data.to_shape((a*b, c)).unwrap();
         let new_face_data = fun(face_data2.view());
@@ -566,16 +605,24 @@ impl Partition {
     }
 
     /// Append a layer that computes output using a linear transformation:
+    ///   x_{l} = w*x_l' + b.
+    pub fn linear_at(&mut self, layer: usize, weight: &ArrayView2<f32>, bias: &ArrayView1<f32>) {
+        self.generalized_linear_at(layer, |x| x.dot(weight), |mut x| x += bias)
+    }
+    /// Append a layer that computes output using a linear transformation:
     ///   x_{l+1} = w*x_l + b.
-    pub fn linear_transform(&mut self, weight: &ArrayView2<f32>, bias: &ArrayView1<f32>) {
-        self.add_layer(|x| x.dot(weight), |mut x| x += bias)
-
+    pub fn linear(&mut self, weight: &ArrayView2<f32>, bias: &ArrayView1<f32>) {
+        self.linear_at(self.last_layer(), weight, bias);
     }
 
+    /// Append a layer that adds the output of two existing layers
+    pub fn sum(&mut self, layer1: usize, layer2: usize) {
+        self.vertex_data.push(&self.vertex_data[layer1] +&self.vertex_data[layer2]);
+        self.face_data.push(&self.face_data[layer1] + &self.face_data[layer2]);
+    }
     /// Append a layer that adds an earlier layer to the output
     pub fn residual(&mut self, layer: usize) {
-        self.vertex_data.push(&self.vertex_data[layer] + self.vertex_data.last().unwrap());
-        self.face_data.push(&self.face_data[layer] + self.face_data.last().unwrap());
+        self.sum(layer, self.last_layer());
     }
 }
 
@@ -656,7 +703,7 @@ mod test {
             let a = p.halfedge_on_face(Face(0));
             let b = p.next(p.next(a));
             println!("Before split {a:?}-{b:?}\n{p:?}");
-            p.split_face(a, b);
+            p.split_face(a, b, EdgeLabel::default());
             println!("split_face {a:?}-{b:?}\n{p:?}");
             p.check_invariants();
         }
@@ -696,7 +743,7 @@ mod test {
         println!("bias: {bias}");
         // partition
         let mut p = Partition::square(2.0);
-        p.linear_transform(&weight.view(), &bias.view());
+        p.linear(&weight.view(), &bias.view());
         p.check_invariants();
         p.relu();
         p.check_invariants();
