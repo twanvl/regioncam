@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 pub mod util;
 pub mod partition;
 pub mod nn;

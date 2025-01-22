@@ -8,7 +8,8 @@ name = "regioncam"
 crate-type = ["cdylib"]
 
 [dependencies]
-ndarray = "0.16.1"
+approx = "0.5.1"
+ndarray = { version = "0.16.1", features = ["approx"] }
 nonmax = "0.5.5"
 numpy = "0.23.0"
 pyo3 = { version = "0.23.4", features = ["extension-module"] }

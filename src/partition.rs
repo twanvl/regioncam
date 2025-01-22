@@ -1,7 +1,8 @@
 // This module defines a halfedge data structure for partitioning 2d space.
 
 use std::fmt::Debug;
-use ndarray::{array, s, Array, Array2, Array3, ArrayView, ArrayView1, ArrayView2, ArrayView3, ArrayViewMut2, Axis, Dimension, NewAxis};
+use ndarray::{array, concatenate, s, stack, Array, Array1, Array2, Array3, ArrayView1, ArrayView2, ArrayView3, ArrayViewMut2, Axis, NewAxis};
+use approx::assert_abs_diff_eq;
 
 use crate::util::{leaky_relu, relu};
 
@@ -82,7 +83,7 @@ impl Debug for Edge {
 
 impl From<Face> for usize {
     fn from(face: Face) -> Self {
-        face.0.into()
+        face.0
     }
 }
 impl Debug for Face {
@@ -137,18 +138,12 @@ enum LayerType {
     Linear,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct EdgeLabel {
     /// Layer on which this edge was introduced
     layer: usize,
     /// Dimension of that layer which caused this edge to be created
     dim: usize,
-}
-
-impl Default for EdgeLabel {
-    fn default() -> Self {
-        Self { layer: Default::default(), dim: Default::default() }
-    }
 }
 
 /// A partition of 2d space.
@@ -161,7 +156,7 @@ pub struct Partition {
 
     face_data:  Vec<Array3<f32>>,  // layer -> face -> f32[D_in, D_F]
     face_he:    Vec<Halfedge>,     // face -> halfedge
-    /// For each (ReLU) layer, for each face: a mask indicating which dimensions are non-negative
+    // /// For each (ReLU) layer, for each face: a mask indicating which dimensions are non-negative
     //face_mask:  Vec<LayerMask>,    // layer -> face -> mask of non-negative dimensions
 
     he_vertex:  Vec<Vertex>,       // halfedge -> vertex
@@ -181,7 +176,7 @@ fn append_lerp(arr: &mut Array2<f32>, i: usize, j: usize, t: f32) -> usize {
     let aj = arr.row(j);
     let ak = &ai + t * (&aj - &ai);
     arr.push_row(ak.view()).unwrap();
-    return k;
+    k
 }
 
 /// Find the point t between 0.0 and 1.0 at which a+t*(b-a) == 0
@@ -202,7 +197,7 @@ impl Partition {
 
     // Constructors
 
-    /// Construct a 
+    /// Construct a Partition with a single region, containing the given convex polygon
     pub fn from_polygon(vertex_data: Array2<f32>) -> Self {
         let n = vertex_data.nrows();
         assert_eq!(vertex_data.ncols(), 2, "Expected two dimensional points");
@@ -329,6 +324,10 @@ impl Partition {
     pub fn vertices_on_face(&self, face: Face) -> impl '_ + Iterator<Item=Vertex> {
         self.halfedges_on_face(face).map(|he| self.start(he))
     }
+    pub fn vertex_data_for_face(&self, face: Face, layer: usize) -> Array2<f32> {
+        let indices = Vec::from_iter(self.vertices_on_face(face).map(usize::from));
+        self.vertex_data[layer].select(Axis(0), &indices)
+    }
 
     // Invariants
 
@@ -350,7 +349,7 @@ impl Partition {
         assert_eq!(self.he_face.len(), self.num_halfedges());
         assert_eq!(self.he_next.len(), self.num_halfedges());
         assert_eq!(self.he_prev.len(), self.num_halfedges());
-        assert_eq!(!self.edge_label.len(), self.num_edges());
+        assert_eq!(self.edge_label.len(), self.num_edges());
         // all indices in the vectors are valid
         for he in &self.face_he {
             assert!(he.0 < self.num_halfedges());
@@ -378,6 +377,33 @@ impl Partition {
         assert!(self.halfedges().all(|he| self.face(self.next(he)) == self.face(he)));
         // he_face and face_he agree
         assert!(self.faces().all(|f| self.face(self.halfedge_on_face(f)) == Some(f)));
+        self.check_face_outputs();
+    }
+
+    #[cfg(test)]
+    fn check_face_outputs(&self) {
+        // check that the face outputs are correct
+        for face in self.faces() {
+            let indices = Vec::from_iter(self.vertices_on_face(face).map(usize::from));
+            let vertex_coords_in = self.vertex_data[0].select(Axis(0), &indices);
+            let vertex_coords_in = concatenate![Axis(1), vertex_coords_in, Array2::ones((indices.len(), 1))];
+            for layer in 0..self.num_layers() {
+                let vertex_coords_out = self.vertex_data[layer].select(Axis(0), &indices);
+                let face_data = self.face_data[layer].index_axis(Axis(0), face.0);
+                let computed_coords_out = vertex_coords_in.dot(&face_data);
+                //println!("diff {face:?} at {layer}: {}", &computed_coords_out - &vertex_coords_out);
+                for i in 0..indices.len() {
+                    for j in 0..vertex_coords_out.ncols() {
+                        if !approx::abs_diff_eq!(computed_coords_out[(i,j)], vertex_coords_out[(i,j)], epsilon=1e-4) {
+                            println!("Not equal: {face:?} at {layer}: vertex {}, dim {j}", indices[i]);
+                            println!("{} * {} != {}", vertex_coords_in.row(i), face_data.column(j), vertex_coords_out[(i,j)]);
+                            println!("was {}", self.vertex_data[layer-1].select(Axis(0), &indices).column(j));
+                        }
+                    }
+                }
+                assert_abs_diff_eq!(&computed_coords_out, &vertex_coords_out, epsilon=1e-4);
+            }
+        }
     }
 
     // Mutations
@@ -431,6 +457,7 @@ impl Partition {
             self.he_prev.extend_from_slice(&[he1, prev2]);
             self.he_prev[he2.0] = new_edge.halfedge(1);
             self.he_prev[next1.0] = new_edge.halfedge(0);
+            self.edge_label.push(self.edge_label[edge.0]);
             (true, new_v, new_edge.halfedge(0), he2)
         }
     }
@@ -486,8 +513,10 @@ impl Partition {
     /// Split all faces in the partition by treating zeros of a function as edges.
     /// Requires that there is at most 1 zero crossing per edge.
     /// The function split(a,b) should return Some(t) if f(lerp(a,b,t)) == 0
-    fn split_by<Split>(&mut self, split: Split, edge_label: EdgeLabel)
-        where Split: Fn(&Self, Vertex, Vertex) -> Option<f32>
+    fn split_by<Split,OnSplit>(&mut self, mut split: Split, mut on_split: OnSplit, edge_label: EdgeLabel)
+        where
+        Split: FnMut(&Self, Vertex, Vertex) -> Option<f32>,
+        OnSplit: FnMut(&mut Self, Vertex)
     {
         // Split edges such that all zeros of the function go through vertices.
         let mut zero_vertices = vec![false; self.num_vertices()];
@@ -497,11 +526,12 @@ impl Partition {
             let (a,b) = self.endpoints(edge);
             if zero_vertices[a.0] || zero_vertices[b.0] {
                 // already have a zero crossing on this edge
-            } else if let Some(t) = split(&self, a, b) {
+            } else if let Some(t) = split(self, a, b) {
                 // split at t
                 let (was_split, new_vertex, _he1, _he2) = self.split_edge(edge, t);
                 if was_split {
                     zero_vertices.push(true);
+                    on_split(self, new_vertex);
                 } else {
                     zero_vertices[new_vertex.0] = true;
                 }
@@ -525,28 +555,36 @@ impl Partition {
     }
 
     /// Split all faces in the partition by treating zeros of the given layer as edges.
-    /// Return a mask for every face where 1 is a positive face, 0 is a negative face
     fn split_by_zero_at(&mut self, layer: usize) {
         // Split faces on activation = 0
         let acts = self.activations(layer);
         for dim in 0..acts.len_of(Axis(1)) {
             let edge_label = EdgeLabel { layer: self.num_layers(), dim };
-            self.split_by(|slf, a, b| {
-                let acts = slf.activations_last();
-                find_zero(acts[[a.0, dim]], acts[[b.0, dim]])
-            }, edge_label);
+            self.split_by(
+                |slf, a, b| {
+                    let acts = slf.activations_last();
+                    find_zero(acts[[a.0, dim]], acts[[b.0, dim]])
+                },
+                |slf, new_vertex| {
+                    // make sure that new vertices are actually 0 in dimension dim
+                    // this may not be true exactly because of rounding errors.
+                    let acts = &mut slf.vertex_data[layer];
+                    acts[(new_vertex.0, dim)] = 0.0;
+                },
+                edge_label);
         }
     }
 
     /// Compute mask of non-negative dimensions for each face,
-    /// The mask is true iff all vertices of the face are non-negative
+    /// The mask is true iff all vertices of the face are non-negative (above -eps)
     fn non_negative_face_mask(&self, layer: usize) -> Array2<bool> {
         let acts = self.activations(layer);
-        let mut mask = Array2::<bool>::default((self.num_faces(), acts.ncols()));
+        let mut mask = Array2::from_elem((self.num_faces(), acts.ncols()), true);
+        let eps = 1e-6;
         for he in self.halfedges() {
             if let Some(face) = self.face(he) {
                 mask.row_mut(face.0).zip_mut_with(&acts.row(self.start(he).0),
-                    |m, x| *m &= *x >= 0.0
+                    |m, x| *m &= *x >= -eps
                 );
             }
         }
@@ -559,12 +597,12 @@ impl Partition {
     pub fn relu_at(&mut self, layer: usize) {
         // Split faces
         self.split_by_zero_at(layer);
-        let face_mask = self.non_negative_face_mask(layer);
         // Compute relu output for vertices
         let acts = self.vertex_data[layer].view();
         let new_vertex_data = relu(&acts);
         self.vertex_data.push(new_vertex_data);
         // Apply mask to compute per-face activation
+        let face_mask = self.non_negative_face_mask(layer);
         let mut face_data = self.face_data[layer].clone();
         face_data.zip_mut_with(&face_mask.slice(s![.., NewAxis, ..]), |x, m| if !m { *x = 0.0; });
         self.face_data.push(face_data);
@@ -665,7 +703,7 @@ mod test {
     use ndarray::{stack, Array1};
     use rand::{rngs::SmallRng, SeedableRng};
 
-    use crate::{nn::IsModule, svg::SvgOptions};
+    use crate::{nn::NNModule, svg::SvgOptions};
 
     use super::*;
 

@@ -5,7 +5,8 @@ use rand_distr::{Distribution, Normal, Uniform};
 use crate::partition::*;
 use crate::util::*;
 
-pub trait IsModule {
+/// A neural network module
+pub trait NNModule {
     fn apply(&self, p: &mut Partition);
     fn forward(&self, x: &ArrayView2<f32>) -> Array2<f32>;
 }
@@ -40,17 +41,17 @@ impl Linear {
     }
 }
 
-impl IsModule for Linear {
+impl NNModule for Linear {
     fn apply(&self, p: &mut Partition) {
         p.linear(&self.weight.view(), &self.bias.view());
     }
 
     fn forward(&self, x: &ArrayView2<f32>) -> Array2<f32> {
-        (x * &self.weight + &self.bias).into()
+        x * &self.weight + &self.bias
     }
 }
 
-impl<M:IsModule> IsModule for Vec<M> {
+impl<M:NNModule> NNModule for [M] {
     fn apply(&self, p: &mut Partition) {
         for module in self {
             module.apply(p);
@@ -76,7 +77,7 @@ pub enum Module {
     Residual(Vec<Module>),
 }
 
-impl IsModule for Module {
+impl NNModule for Module {
     fn apply(&self, p: &mut Partition) {
         use Module::*;
         match self {
