@@ -149,12 +149,12 @@ mod regioncam {
         /// Add a new layer that applies a LeakyReLU operation.
         /// 
         /// Parameters:
-        ///  * `factor`: multiplicative factor for negative inputs.
+        ///  * `negative_slope`: multiplicative factor for negative inputs.
         ///  * `input_layer``: use the output of the given layer as input (default: last layer).
-        #[pyo3(signature=(factor, input_layer=None))]
-        fn leaky_relu(&mut self, factor: f32, input_layer: Option<usize>) {
+        #[pyo3(signature=(negative_slope, input_layer=None))]
+        fn leaky_relu(&mut self, negative_slope: f32, input_layer: Option<usize>) {
             let input_layer = input_layer.unwrap_or(self.partition.last_layer());
-            self.partition.leaky_relu_at(input_layer, factor)
+            self.partition.leaky_relu_at(input_layer, negative_slope)
         }
 
         /// Add a new layer that applies a linear transformation,
@@ -185,64 +185,6 @@ mod regioncam {
         ///  * `layer`:        network or layer(s) to apply
         ///  * `input_layer``: use the output of the given layer as input (default: last layer).
         #[pyo3(signature=(layer, input_layer=None))]
-        /*fn add<'py>(&mut self, net: &Bound<'py, PyAny>, input_layer: Option<usize>) -> PyResult<()> {
-            let input_layer = input_layer.unwrap_or(self.partition.last_layer());
-            if let Ok(net) = net.downcast::<nn::Linear>() {
-                let net = net.borrow();
-                let weight = net.weight.bind(net.py()).readonly();
-                let bias   = net.bias.bind(net.py()).readonly();
-                self.partition.linear_at(input_layer, &weight.as_array(), &bias.as_array());
-            } else if let Ok(_net) = net.downcast::<nn::ReLU>() {
-                self.partition.relu_at(input_layer);
-            } else if let Ok(net) = net.downcast::<nn::LeakyReLU>() {
-                self.partition.leaky_relu_at(input_layer, net.borrow().factor);
-            } else if let Ok(net) = net.downcast::<nn::Residual>() {
-                self.add(net.borrow().0.as_any().bind(net.py()), Some(input_layer))?;
-                self.partition.residual(input_layer);
-            } else if let Ok(net) = net.downcast::<nn::Sequential>() {
-                let net = net.borrow();
-                let list = net.0.bind(net.py());
-                self.add_list(list, input_layer)?;
-            } else if let Ok(list) = net.downcast::<PyList>() {
-                self.add_list(list, input_layer)?;
-            } else {
-                //let type_name = net.get_type().qualname().unwrap_or(*intern!(net.py(), "<unknown>"));
-                //return Err(PyTypeError::new_err(format!("argument 'net': '{}' object is not a supported layer type.", type_name)));
-                return Err(DowncastError::new(net, "Layer").into());
-            }
-            Ok(())
-        }*/
-        /*
-        fn add<'py>(&mut self, py: Python<'py>, layer: nn::Layer<'py>, input_layer: Option<usize>) -> PyResult<()> {
-            let input_layer = input_layer.unwrap_or(self.partition.last_layer());
-            match layer {
-                nn::Layer::Linear(layer) => {
-                    let layer = layer.borrow();
-                    let weight = layer.weight.bind(py).readonly();
-                    let bias   = layer.bias.bind(py).readonly();
-                    self.partition.linear_at(input_layer, &weight.as_array(), &bias.as_array());
-                }
-                nn::Layer::ReLU(_) => {
-                    self.partition.relu_at(input_layer);
-                }
-                nn::Layer::LeakyReLU(layer) => {
-                    self.partition.leaky_relu_at(input_layer, layer.factor);
-                }
-                nn::Layer::Residual(layer) => {
-                    self.add(py, layer.0.bind(py).extract()?, Some(input_layer))?;
-                    self.partition.residual(input_layer);
-                }
-                nn::Layer::Sequential(list) => {
-                    let mut input_layer = input_layer;
-                    for item in list {
-                        self.add(py, item.extract()?, Some(input_layer))?;
-                        input_layer = self.partition.last_layer();
-                    }
-                }
-            }
-            Ok(())
-        }
-         */
         fn add<'py>(&mut self, py: Python<'py>, layer: &Layer, input_layer: Option<usize>) -> PyResult<()> {
             let input_layer = input_layer.unwrap_or(self.partition.last_layer());
             match layer {
@@ -254,8 +196,8 @@ mod regioncam {
                 Layer::ReLU() => {
                     self.partition.relu_at(input_layer);
                 }
-                Layer::LeakyReLU { factor } => {
-                    self.partition.leaky_relu_at(input_layer, *factor);
+                Layer::LeakyReLU { negative_slope } => {
+                    self.partition.leaky_relu_at(input_layer, *negative_slope);
                 }
                 Layer::Residual { layer } => {
                     self.add(py, layer.get(), Some(input_layer))?;
@@ -312,7 +254,7 @@ mod regioncam {
         ReLU(),
         /// A leaky relu activation function
         LeakyReLU {
-            factor: f32,
+            negative_slope: f32,
         },
         /// A residual connection around a network layer
         Residual {
@@ -363,8 +305,8 @@ mod regioncam {
                 Layer::ReLU() => {
                     writeln!(w, "ReLU").unwrap();
                 }
-                Layer::LeakyReLU { factor } => {
-                    writeln!(w,"LeakyReLU({factor})").unwrap();
+                Layer::LeakyReLU { negative_slope } => {
+                    writeln!(w,"LeakyReLU({negative_slope})").unwrap();
                 }
                 Layer::Residual { layer } => {
                     writeln!(w, "Residual(").unwrap();
@@ -414,9 +356,9 @@ mod regioncam {
 
         /// A leaky relu activation function
         #[pyfunction]
-        #[pyo3(name="LeakyReLU")]
-        fn leaky_relu(factor: f32) -> Layer {
-            Layer::LeakyReLU { factor }
+        #[pyo3(name="LeakyReLU", signature=(negative_slope=1e-2))]
+        fn leaky_relu(negative_slope: f32) -> Layer {
+            Layer::LeakyReLU { negative_slope }
         }
 
         /// A leaky relu activation function
@@ -432,6 +374,38 @@ mod regioncam {
         fn sequential(layers: Vec<Py<Layer>>) -> Layer {
             Layer::Sequential { layers }
         }
+        
+        /// Convert a torch layer into a Regioncam layer
+        fn convert<'a,'py>(arg: &'a Bound<'py, PyAny>) -> PyResult<PyCow<'a, 'py, Layer>> {
+            if let Ok(layer) = arg.downcast() {
+                Ok(PyCow::Bound(layer))
+            } else if qualname(arg) == "torch.nn.Linear" {
+                let weight = arg.getattr(intern!(arg.py(), "weight"))?;
+                let weight = downcast_array(&weight)?;
+                let bias = arg.getattr(intern!(arg.py(), "bias"))?;
+                let bias = downcast_array(&bias)?;
+                // pytorch has transposed weight matrix
+                let weight = weight.transpose()?;
+                Ok(PyCow::Owned(linear(weight, bias)))
+            } else if qualname(arg) == "torch.nn.ReLU" {
+                Ok(PyCow::Owned(relu()))
+            } else if qualname(arg) == "torch.nn.LeakyReLU" {
+                let negative_slope = arg.getattr(intern!(arg.py(), "negative_slope"))?.extract()?;
+                Ok(PyCow::Owned(leaky_relu(negative_slope)))
+            } else if qualname(arg) == "torch.nn.Sequential" {
+                todo!()
+            } else if let Ok(list) = arg.downcast::<PyList>() {
+                // convert a list to a sequential layer
+                let mut layers = Vec::new();
+                for item in list {
+                    let layer = convert(&item)?;
+                    layers.push(layer.into_bound(arg.py())?.unbind());
+                }
+                Ok(PyCow::Owned(sequential(layers)))
+            } else {
+                Err(DowncastError::new(arg, "Layer").into())
+            }
+        }
     }
 
     #[pymodule_init]
@@ -442,6 +416,41 @@ mod regioncam {
             m.add(name, layer_cls.getattr(name)?)?;
         }
         Ok(())
+    }
+
+    enum PyCow<'a, 'py, T> {
+        //Borrowed(Borrowed<'a, 'py, T>),
+        Bound(&'a Bound<'py, T>),
+        Owned(T),
+    }
+    impl<'a, 'py, T: PyClass + Into<PyClassInitializer<T>>> PyCow<'a, 'py, T> {
+        fn into_bound(self, py: Python<'py>) -> PyResult<Bound<'py, T>> {
+            match self {
+                //PyCow::Borrowed(value) => Ok(value.into_bound()),
+                PyCow::Bound(value) => Ok(value.clone()),
+                PyCow::Owned(value) => Bound::new(py, value),
+            }
+        }
+        fn borrow(&'a self) -> PyCowRef<'a,T> {
+            match self {
+                //PyCow::Borrowed(value) => PyCowRef::Bound(value.borrow()),
+                PyCow::Bound(value) => PyCowRef::Bound(value.borrow()),
+                PyCow::Owned(value) => PyCowRef::Owned(value),
+            }
+        }
+    }
+    enum PyCowRef<'a, T: PyClass> {
+        Bound(PyRef<'a, T>),
+        Owned(&'a T),
+    }
+    impl<'a, T: PyClass> std::ops::Deref for PyCowRef<'a, T> {
+        type Target = T;
+        fn deref(&self) -> &Self::Target {
+            match self {
+                PyCowRef::Bound(value) => value,
+                PyCowRef::Owned(value) => value,
+            }
+        }
     }
 
     fn qualname<'py>(arg: &'py Bound<'py, PyAny>) -> Bound<'py, PyString> {

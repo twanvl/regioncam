@@ -615,18 +615,18 @@ impl Partition {
         self.relu_at(self.last_layer());
     }
 
-    pub fn leaky_relu_at(&mut self, layer: usize, factor: f32) {
+    pub fn leaky_relu_at(&mut self, layer: usize, negative_slope: f32) {
         self.split_by_zero_at(layer);
         let face_mask = self.non_negative_face_mask(layer);
         // Compute leaky relu output for vertices
-        self.vertex_data.push(leaky_relu(&self.vertex_data[layer].view(), factor));
+        self.vertex_data.push(leaky_relu(&self.vertex_data[layer].view(), negative_slope));
         // Apply mask to compute per-face activation
         let mut face_data = self.face_data[layer].clone();
-        face_data.zip_mut_with(&face_mask.slice(s![.., NewAxis, ..]), |x, m| if !m { *x *= factor; });
+        face_data.zip_mut_with(&face_mask.slice(s![.., NewAxis, ..]), |x, m| if !m { *x *= negative_slope; });
         self.face_data.push(face_data);
     }
-    pub fn leaky_relu(&mut self, factor: f32) {
-        self.leaky_relu_at(self.last_layer(), factor);
+    pub fn leaky_relu(&mut self, negative_slope: f32) {
+        self.leaky_relu_at(self.last_layer(), negative_slope);
     }
 
     /// Append a layer that computes output using the given function.

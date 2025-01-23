@@ -17,3 +17,10 @@ rand = { version = "0.8.5", features = ["small_rng"] }
 rand_distr = "0.4.3"
 svg_fmt = "0.4.4"
 wasm-bindgen = "0.2.100"
+
+[profile.release]
+debug = true
+
+#[[bench]]
+#name="random_mlp"
+#harness=false

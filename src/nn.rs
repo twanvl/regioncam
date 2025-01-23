@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use ndarray::prelude::*;
 use rand::Rng;
 use rand_distr::{Distribution, Normal, Uniform};
@@ -9,6 +11,7 @@ use crate::util::*;
 pub trait NNModule {
     fn apply(&self, p: &mut Partition);
     fn forward(&self, x: &ArrayView2<f32>) -> Array2<f32>;
+    // fn repr(&self) -> String;
 }
 
 /// A linear layer in a neural network
@@ -29,14 +32,17 @@ fn randu<Sh: ShapeBuilder, R: Rng + ?Sized>(shape: Sh, low: f32, high: f32, rng:
 impl Linear {
     pub fn new<R: Rng + ?Sized>(dim_in: usize, dim_out: usize, rng: &mut R) -> Linear {
         let std = 1.0 / f32::sqrt(dim_in as f32);
-        let weight = randn((dim_in, dim_out), 0.0, std, rng);
-        let bias = randn(dim_out, 0.0, std, rng);
-        Linear { weight, bias }
+        let distr = Normal::new(0.0, std).unwrap();
+        Self::from_distr(dim_in, dim_out, distr, rng)
     }
     pub fn new_uniform<R: Rng + ?Sized>(dim_in: usize, dim_out: usize, rng: &mut R) -> Linear {
         let std = 1.0 / f32::sqrt(dim_in as f32);
-        let weight = randu((dim_in, dim_out), -std, std, rng);
-        let bias = randu(dim_out, -std, std, rng);
+        let distr = Uniform::new(-std, std);
+        Self::from_distr(dim_in, dim_out, distr, rng)
+    }
+    pub fn from_distr<R: Rng + ?Sized, D: Distribution<f32>>(dim_in: usize, dim_out: usize, distr: D, rng: &mut R) -> Linear {
+        let weight =Array::from_shape_simple_fn((dim_in, dim_out),|| distr.sample(rng));
+        let bias = Array::from_shape_simple_fn(dim_out,|| distr.sample(rng));
         Linear { weight, bias }
     }
 }
@@ -51,7 +57,7 @@ impl NNModule for Linear {
     }
 }
 
-impl<M:NNModule> NNModule for [M] {
+impl<M: NNModule> NNModule for [M] {
     fn apply(&self, p: &mut Partition) {
         for module in self {
             module.apply(p);
@@ -64,6 +70,16 @@ impl<M:NNModule> NNModule for [M] {
             x = module.forward(&x.view());
         }
         x
+    }
+}
+
+impl<M: NNModule> NNModule for Arc<M> {
+    fn apply(&self, p: &mut Partition) {
+        self.as_ref().apply(p)
+    }
+    
+    fn forward(&self, x: &ArrayView2<f32>) -> Array2<f32> {
+        self.as_ref().forward(x)
     }
 }
 
@@ -84,7 +100,7 @@ impl NNModule for Module {
             Identity => (),
             Linear(module) => module.apply(p),
             ReLU => p.relu(),
-            LeakyReLU(factor) => p.leaky_relu(*factor),
+            LeakyReLU(negative_slope) => p.leaky_relu(*negative_slope),
             Sequential(module) => module.apply(p),
             Residual(module) => {
                 let layer = p.last_layer();
@@ -100,7 +116,7 @@ impl NNModule for Module {
             Identity => x.into_owned(),
             Linear(module) => module.forward(x),
             ReLU => relu(x),
-            LeakyReLU(factor) => leaky_relu(x, *factor),
+            LeakyReLU(negative_slope) => leaky_relu(x, *negative_slope),
             Sequential(module) => module.forward(x),
             Residual(module) => x + module.forward(x),
         }
