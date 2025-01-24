@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 use std::fmt::Debug;
-use ndarray::{array, concatenate, s, stack, Array, Array1, Array2, Array3, ArrayView1, ArrayView2, ArrayView3, ArrayViewMut2, Axis, NewAxis};
+use ndarray::{array, concatenate, s, stack, Array, Array1, Array2, Array3, ArrayView, ArrayView1, ArrayView2, ArrayView3, ArrayViewMut2, Axis, Dimension, NewAxis};
 use approx::assert_abs_diff_eq;
 
 use crate::util::*;
@@ -132,9 +132,8 @@ impl Debug for OptFace {
 #[derive(Debug, Clone, PartialEq)]
 enum LayerFaceMask {
     NoMask,
-    ReLU(Array2<bool>),
-    LeakyReLU(Array2<bool>, f32),
-    //Max(Array2<usize>),
+    NonNegative(Array2<bool>),
+    ArgMax(Array2<usize>),
 }
 enum LayerType {
     Input,
@@ -162,7 +161,7 @@ pub struct Partition {
     face_data:  Vec<Array3<f32>>,  // layer -> face -> f32[D_in, D_F]
     face_he:    Vec<Halfedge>,     // face -> halfedge
     // /// For each (ReLU) layer, for each face: a mask indicating which dimensions are non-negative
-    //face_mask:  Vec<LayerMask>,    // layer -> face -> mask of non-negative dimensions
+    //face_mask:  Vec<LayerMask>,    // layer -> mask used to construct face data
 
     he_vertex:  Vec<Vertex>,       // halfedge -> vertex
     he_face:    Vec<OptFace>,      // halfedge -> face or NONE
@@ -308,6 +307,17 @@ impl Partition {
     }
     pub fn halfedge_on_face(&self, face: Face) -> Halfedge {
         self.face_he[face.0]
+    }
+    pub fn face_centroid_at(&self, layer: usize, face: Face) -> Array1<f32> {
+        self.vertex_data_for_face(face, layer).mean_axis(Axis(0)).unwrap()
+    }
+    pub fn face_centroid(&self, face: Face) -> Array1<f32> {
+        self.face_centroid_at(0, face)
+    }
+    pub fn face_activation_for(&self, layer: usize, face: Face, inputs: ArrayView1<f32>) -> Array1<f32> {
+        let face_data = self.face_data[layer].index_axis(Axis(0), face.0);
+        let inputs = concatenate![Axis(0), inputs, Array1::ones(1)];
+        inputs.dot(&face_data)
     }
 
     //fn halfedges(&self
@@ -754,7 +764,7 @@ impl Partition {
         self.max_pool_at(self.last_layer());
     }
 
-    pub fn arg_max_pool_at(&mut self, layer: usize) {
+    pub fn argmax_pool_at(&mut self, layer: usize) {
         let max = self.split_by_argmax_at(layer);
         // New face data takes the given dim
         let face_argmax = self.argmax_face_index(layer, max.as_slice().unwrap());
@@ -767,6 +777,9 @@ impl Partition {
         let acts = self.activations(layer);
         let vertex_argmax = Array::from_iter(acts.rows().into_iter().map(|row| argmax(row) as f32));
         self.vertex_data.push(vertex_argmax.insert_axis(Axis(1)));
+    }
+    pub fn argmax_pool(&mut self) {
+        self.argmax_pool_at(self.last_layer());
     }
 
     /// Append a layer that computes output using the given function.
@@ -975,8 +988,6 @@ mod test {
         let dim_in = 2;
         let dim_hidden = 10;
         let dim_out = 10;
-        //let dim_hidden = 3;
-        //let dim_out = 4;
         // two layer network
         let mut p = Partition::square(1.0);
         crate::nn::Linear::new_uniform(dim_in, dim_hidden, &mut rng).apply(&mut p);
@@ -996,6 +1007,35 @@ mod test {
         if true {
             use std::fs::File;
             let mut file = File::create("max_pool.svg").expect("Can't create file");
+            SvgOptions::new().write_svg(&p, &mut file).unwrap();
+        }
+    }
+    #[test]
+    fn argmax_pool() {
+        let mut rng = SmallRng::seed_from_u64(42);
+        let dim_in = 2;
+        let dim_hidden = 25;
+        let dim_out = 10;
+        // two layer network
+        let mut p = Partition::square(1.0);
+        crate::nn::Linear::new_uniform(dim_in, dim_hidden, &mut rng).apply(&mut p);
+        p.relu();
+        p.check_invariants();
+        println!("{} faces after relu", p.num_faces());
+        for _ in 0..0 {
+            crate::nn::Linear::new_uniform(dim_hidden, dim_hidden, &mut rng).apply(&mut p);
+            p.relu();
+            p.check_invariants();
+            println!("{} faces after relu", p.num_faces());
+        }
+        crate::nn::Linear::new_uniform(dim_hidden, dim_out, &mut rng).apply(&mut p);
+        p.check_invariants();
+        p.argmax_pool_at(p.last_layer());
+        // Note: face values do not match vertex value after argmax pool
+        println!("{} faces", p.num_faces());
+        if true {
+            use std::fs::File;
+            let mut file = File::create("argmax_pool.svg").expect("Can't create file");
             SvgOptions::new().write_svg(&p, &mut file).unwrap();
         }
     }
