@@ -14,6 +14,7 @@ pub struct SvgOptions {
     pub face_color_by_value: f32,
     pub image_size: (f32,f32),
     pub image_border: f32,
+    pub draw_boundary: bool,
     pub line_width: f32,
     pub line_width_decision_boundary: f32,
     pub line_color: Color,
@@ -27,6 +28,7 @@ impl Default for SvgOptions {
             face_color_by_value: 0.6,
             image_size: (800.0, 800.0),
             image_border: 0.0,
+            draw_boundary: false,
             line_width: 0.5,
             line_width_decision_boundary: 1.5,
             line_color: black(),
@@ -82,15 +84,17 @@ impl SvgOptions {
         }
         // draw edges
         for edge in p.edges() {
-            let (a,b) = p.endpoints(edge);
-            let a = vertex_coord(a);
-            let b = vertex_coord(b);
-            let label = p.edge_label(edge);
-            let is_last = last_layer_is_classification && label.layer == p.last_layer();
-            if is_last {
-                writeln!(w, "{}", line_segment(a.0, a.1, b.0, b.1).width(self.line_width_decision_boundary).color(self.line_color_decision_boundary))?;
-            } else {
-                writeln!(w, "{}", line_segment(a.0, a.1, b.0, b.1).width(self.line_width).color(self.line_color))?;
+            if self.draw_boundary || !p.is_boundary(edge) {
+                let (a,b) = p.endpoints(edge);
+                let a = vertex_coord(a);
+                let b = vertex_coord(b);
+                let label = p.edge_label(edge);
+                let is_last = last_layer_is_classification && label.layer == p.last_layer();
+                if is_last {
+                    writeln!(w, "{}", line_segment(a.0, a.1, b.0, b.1).width(self.line_width_decision_boundary).color(self.line_color_decision_boundary))?;
+                } else {
+                    writeln!(w, "{}", line_segment(a.0, a.1, b.0, b.1).width(self.line_width).color(self.line_color))?;
+                }
             }
         }
         writeln!(w, "{}", EndSvg)?;

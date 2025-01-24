@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 use std::fmt::Debug;
-use ndarray::{array, concatenate, s, stack, Array, Array1, Array2, Array3, ArrayView, ArrayView1, ArrayView2, ArrayView3, ArrayViewMut2, Axis, Dimension, NewAxis};
+use ndarray::{array, concatenate, s, stack, Array, Array1, Array2, Array3, ArrayView, ArrayView1, ArrayView2, ArrayView3, ArrayViewMut2, Axis, Dimension, NewAxis, Slice, Zip};
 use approx::assert_abs_diff_eq;
 
 use crate::util::*;
@@ -58,14 +58,21 @@ impl From<Halfedge> for usize {
 }
 impl Debug for Halfedge {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "h{}", self.0)
+        //write!(f, "h{}", self.0)
+        if self.side() == 0 {
+            write!(f, "h{}", self.edge().0)
+        } else {
+            write!(f, "H{}", self.edge().0)
+        }
     }
 }
 
 impl Edge {
+    #[inline]
     pub fn halfedge(self, side: usize) -> Halfedge {
         Halfedge::new(self, side)
     }
+    #[inline]
     pub fn halfedges(self) -> (Halfedge, Halfedge) {
         (self.halfedge(0), self.halfedge(1))
     }
@@ -167,7 +174,7 @@ pub struct Partition {
     he_face:    Vec<OptFace>,      // halfedge -> face or NONE
     he_next:    Vec<Halfedge>,     // halfedge -> halfedge
     he_prev:    Vec<Halfedge>,     // halfedge -> halfedge
-    
+
     edge_label: Vec<EdgeLabel>,    // edge -> label
 }
 
@@ -281,7 +288,6 @@ impl Partition {
         self.he_next[he.0]
     }
     pub fn prev(&self, he: Halfedge) -> Halfedge {
-        //self.next(he.opposite()).opposite()
         self.he_prev[he.0]
     }
     fn optface(&self, he: Halfedge) -> OptFace {
@@ -299,11 +305,15 @@ impl Partition {
     pub fn endpoints(&self, edge: Edge) -> (Vertex, Vertex) {
         (self.start(edge.halfedge(0)), self.start(edge.halfedge(1)))
     }
-    fn edge_optfaces(&self, edge: Edge) -> (OptFace, OptFace) {
-        (self.optface(edge.halfedge(0)), self.optface(edge.halfedge(1)))
+    pub fn edge_faces(&self, edge: Edge) -> (Option<Face>, Option<Face>) {
+        (self.face(edge.halfedge(0)), self.face(edge.halfedge(1)))
     }
     pub fn edge_label(&self, edge: Edge) -> &EdgeLabel {
         &self.edge_label[edge.0]
+    }
+    pub fn is_boundary(&self, edge: Edge) -> bool {
+        let (f1, f2) = self.edge_faces(edge);
+        f1.is_none() || f2.is_none()
     }
     pub fn halfedge_on_face(&self, face: Face) -> Halfedge {
         self.face_he[face.0]
@@ -321,7 +331,7 @@ impl Partition {
     }
 
     //fn halfedges(&self
-    
+
     // Iterators
 
     pub fn vertices(&self) -> impl ExactSizeIterator<Item=Vertex> {
@@ -349,8 +359,7 @@ impl Partition {
 
     // Invariants
 
-    /// check the class invariants
-    #[cfg(test)]
+    /// Check the class invariants
     fn check_invariants(&self) {
         // vectors have the right size
         assert!(self.vertex_data.len() > 0);
@@ -370,7 +379,7 @@ impl Partition {
         assert_eq!(self.edge_label.len(), self.num_edges());
         // all indices in the vectors are valid
         for he in &self.face_he {
-            assert!(he.0 < self.num_halfedges());
+            assert!(he.0 < self.num_halfedges(), "face_he: Invalid halfedge in face: {} out of bounds {}", he.0, self.num_halfedges());
         }
         for face in &self.he_face {
             if let Some(face) = face.view() {
@@ -381,24 +390,35 @@ impl Partition {
             assert!(vertex.0 < self.num_vertices());
         }
         for he in &self.he_next {
-            assert!(he.0 < self.num_halfedges(), "Invalid halfedge: {} out of bounds {}", he.0, self.num_halfedges());
+            assert!(he.0 < self.num_halfedges(), "he_next: Invalid halfedge: {} out of bounds {}", he.0, self.num_halfedges());
         }
         for he in &self.he_prev {
-            assert!(he.0 < self.num_halfedges(), "Invalid halfedge: {} out of bounds {}", he.0, self.num_halfedges());
+            assert!(he.0 < self.num_halfedges(), "he_prev: Invalid halfedge: {} out of bounds {}", he.0, self.num_halfedges());
         }
         // previous/next of halfedges line up
-        assert!(self.halfedges().all(|he| self.next(self.prev(he)) == he));
-        assert!(self.halfedges().all(|he| self.prev(self.next(he)) == he));
+        for he in self.halfedges() {
+            assert_eq!(self.next(self.prev(he)), he, "he_next and he_prev should agree for {he:?}");
+            assert_eq!(self.prev(self.next(he)), he, "he_prev and he_next should agree for {he:?}");
+        }
         // next halfedge has correct start
         assert!(self.halfedges().all(|he| self.start(self.next(he)) == self.end(he)));
         // next halfedge has same face
         assert!(self.halfedges().all(|he| self.face(self.next(he)) == self.face(he)));
         // he_face and face_he agree
         assert!(self.faces().all(|f| self.face(self.halfedge_on_face(f)) == Some(f)));
+        // no loops
+        assert!(self.halfedges().all(|he| self.next(he) != he));
+        // there are no degenerate faces (faces with 2 vertices)
+        // except that we allow degenerate faces not connected to anything (for now!)
+        assert!(self.halfedges().all(|he| self.next(self.next(he)) != he || self.next(he) == he.opposite()));
+        // there are no degenerate edges (edges that end in a vertex with no other connections)
+        assert!(self.halfedges().all(|he| self.next(he) != he.opposite() || self.next(self.next(he)) == he));
+        // Note: we *do* allow edges with the same face on both sides
+        //assert!(self.halfedges().all(|he| self.face(he) != self.face(he.opposite()) || self.next(self.next(he)) == he && self.next(self.next(he)) == he));
+        // outputs for faces and vertices match
         self.check_face_outputs();
     }
 
-    #[cfg(test)]
     fn check_face_outputs(&self) {
         // check that the face outputs are correct
         for face in self.faces() {
@@ -482,10 +502,12 @@ impl Partition {
 
     /// Split a face by adding an edge between the start vertices of a and b.
     /// A new face is inserted for the loop start(a)...start(b).
-    pub fn split_face(&mut self, a: Halfedge, b: Halfedge, edge_label: EdgeLabel) -> Face {
-        let face = self.optface(a);
-        assert!(self.face(a).is_some(), "Cannot split the outside face");
+    pub fn split_face(&mut self, a: Halfedge, b: Halfedge, edge_label: EdgeLabel) -> (Face, Edge) {
+        let face = self.face(a).expect("Cannot split the outside face");
         assert_eq!(self.face(a), self.face(b));
+        assert_ne!(a, b, "Must give different halfedges to split face");
+        assert_ne!(a, self.prev(b), "Must give non-adjacent halfedges to split face");
+        assert_ne!(b, self.prev(a), "Must give non-adjacent halfedges to split face");
         // add edge
         let (as_, _ae) = (self.start(a), self.end(a));
         let (bs,  _be) = (self.start(b), self.end(b));
@@ -503,7 +525,7 @@ impl Partition {
         println!("  --{bp:?}--> {bs:?} --{:?}--> {as_:?} --{a:?}--> {ae:?}", new_edge.halfedge(1));
         */
         self.he_vertex.extend_from_slice(&[as_, bs]);
-        self.he_face.extend_from_slice(&[face, face]);
+        self.he_face.extend_from_slice(&[face.into(), face.into()]);
         self.he_next.extend_from_slice(&[b, a]);
         self.he_next[ap.0] = new_edge.halfedge(0);
         self.he_next[bp.0] = new_edge.halfedge(1);
@@ -520,12 +542,203 @@ impl Partition {
         self.face_he.push(new_edge.halfedge(1));
         self.face_he[face.0] = new_edge.halfedge(0);
         // assign halfedges to new face
-        let mut he = new_edge.halfedge(1);
-        while self.he_face[he.0] != new_face.into() {
-            self.he_face[he.0] = new_face.into();
+        self.assign_halfedge_in_loop_to_face(new_edge.halfedge(1), new_face.into());
+        (new_face, new_edge)
+    }
+
+    /// Assign all halfedges in a loop starting at he to the given face
+    fn assign_halfedge_in_loop_to_face(&mut self, mut he: Halfedge, face: OptFace) {
+        while self.he_face[he.0] != face.into() {
+            self.he_face[he.0] = face.into();
             he = self.next(he);
         }
-        new_face
+    }
+
+    /*struct Remover<'a> {
+        partition: &Partition,
+        removed_edges:
+    }*/
+    /// Merge two faces by removing the edge between them.
+    /// This function only marks the edge as invalid, without actually removing it, because that would mess up the order of edges.
+    pub fn merge_faces(&mut self, edge: Edge) {
+        let face0 = self.face(edge.halfedge(0)).expect("Can't merge with outside face");
+        let face1 = self.face(edge.halfedge(1)).expect("Can't merge with outside face");
+        assert_ne!(face0, face1, "Can't merge edges within a face");
+        if cfg!(debug_assertions) {
+            // The face data for the two faces should be the same
+            for face_data in &self.face_data {
+                assert_eq!(face_data.index_axis(Axis(0), face0.0), face_data.index_axis(Axis(0), face1.0), "Face data of two merged faces should be the same.");
+            }
+        }
+        // Assign halfedges to same face
+        self.assign_halfedge_in_loop_to_face(self.halfedge_on_face(face1), face0.into());
+        // Update prev/next
+        // old situation:
+        //    --p0--> a --edge[0]--> b --n0-->
+        //    --p1--> b --edge[1]--> a --n1-->
+        // new situation:
+        //    --p0--> a --n1-->
+        //    --p1--> b --n0-->
+        let (he0, he1) = edge.halfedges();
+        let (n0, n1) = (self.next(he0), self.next(he1));
+        let (p0, p1) = (self.prev(he0), self.prev(he1));
+        self.he_next[p0.0] = n1;
+        self.he_next[p1.0] = n0;
+        self.he_prev[n0.0] = p1;
+        self.he_prev[n1.0] = p0;
+        // The delted edge can not be the face_he
+        if self.face_he[face0.0].edge() == edge {
+            self.face_he[face0.0] = n0;
+        }
+        // Remove face and (mark) edge as removed
+        // Make isolated face out of edge and face1
+        self.mark_edge_invalid(edge);
+        self.unchecked_remove_face(face1);
+
+        // We might have made a degenerate edge. We should remove it now
+        // This happens when there were two or more edges between the faces
+        // situation:  --p0--> a --n1/p0.opposite()-->
+        //let mut edges_to_remove = vec![edge]
+        fn remove_degenerate_edges(slf: &mut Partition, mut he: Halfedge, face: Face) {
+            while slf.he_next[he.0] == he.opposite() {
+                // old situation: --p--> x --he--> y --he.opposite--> x --n-->
+                // new situation: --p--> x --n-->
+                let op = he.opposite();
+                let p = slf.prev(he);
+                let n = slf.next(op);
+                slf.he_next[p.0] = n;
+                slf.he_prev[n.0] = p;
+                if slf.face_he[face.0].edge() == he.edge() {
+                    slf.face_he[face.0] = p;
+                }
+                // Make isolated loop
+                slf.mark_edge_invalid(he.edge());
+                // TODO: the edge he and the vertex he.end() can be deleted.
+                // It is possible that he was already in a degenerate loop before this call.
+                // We don't want to end up in an infinite loop in that case.
+                // This can happen with weird non-convex topologies
+                if p == op {
+                    break;
+                }
+                he = p;
+            }
+        }
+        remove_degenerate_edges(self, p0, face0);
+        remove_degenerate_edges(self, p1, face0);
+
+        self.unchecked_remove_edge(edge);
+    }
+
+    /// Mark an edge as removed/invalid
+    fn mark_edge_invalid(&mut self, edge: Edge) {
+        let (he0, he1) = edge.halfedges();
+        self.he_next[he0.0] = he1;
+        self.he_next[he1.0] = he0;
+        self.he_prev[he0.0] = he1;
+        self.he_prev[he1.0] = he0;
+        self.he_face[he0.0] = OptFace::NONE;
+        self.he_face[he1.0] = OptFace::NONE;
+    }
+    /// Is the given edge invalid?
+    fn is_invalid(&self, edge: Edge) -> bool {
+        self.next(edge.halfedge(0)) == edge.halfedge(1)
+    }
+
+    /// Remove all invalid edges. This renumbers existing edges.
+    fn remove_invalid_edges(&mut self) {
+        let mut edge = Edge(self.num_edges() - 1);
+        loop {
+            if self.is_invalid(edge) {
+                self.unchecked_remove_edge(edge);
+            }
+            if edge.0 == 0 {
+                break
+            } else {
+                edge.0 -= 1;
+            }
+        }
+    }
+
+    // Remove an edge that is not being used. Should only be called on invalid edges
+    fn unchecked_remove_edge(&mut self, unused_edge: Edge) {
+        debug_assert!(self.is_invalid(unused_edge), "Edge should be unused");
+
+        // Make the last edge unused
+        let last_edge = Edge(self.num_edges() - 1);
+        if last_edge != unused_edge && !self.is_invalid(last_edge) {
+            for side in [0,1] {
+                let unused_he = unused_edge.halfedge(side);
+                let last_he = last_edge.halfedge(side);
+                // update references to last_he
+                let last_prev = self.prev(last_he);
+                let last_next = self.next(last_he);
+                self.he_next[last_prev.0] = unused_he;
+                self.he_prev[last_next.0] = unused_he;
+                if let Some(face) = self.face(last_he) {
+                    if self.face_he[face.0] == last_he {
+                        self.face_he[face.0] = unused_he;
+                    }
+                }
+                // assign halfedge properties
+                self.he_next[unused_he.0] = self.he_next[last_he.0];
+                self.he_prev[unused_he.0] = self.he_prev[last_he.0];
+                self.he_vertex[unused_he.0] = self.he_vertex[last_he.0];
+                self.he_face[unused_he.0] = self.he_face[last_he.0];
+            }
+            // assign edge properties
+            self.edge_label[unused_edge.0] = self.edge_label[last_edge.0];
+        }
+
+        // Remove the last edge
+        self.he_next.truncate(self.he_next.len() - 2);
+        self.he_prev.truncate(self.he_prev.len() - 2);
+        self.he_vertex.truncate(self.he_vertex.len() - 2);
+        self.he_face.truncate(self.he_face.len() - 2);
+        self.edge_label.pop();
+    }
+
+    // Remove a face that is not being used
+    fn unchecked_remove_face(&mut self, unused_face: Face) {
+        debug_assert!(!self.he_face.contains(&unused_face.into()), "Face should be unused");
+
+        let last_face = Face(self.num_faces() - 1);
+        if unused_face != last_face {
+            // Move the content of last_face into face
+            // Update references from halfedges in last_face to point to face
+            self.assign_halfedge_in_loop_to_face(self.halfedge_on_face(last_face), unused_face.into());
+            self.face_he[unused_face.0] = self.face_he[last_face.0];
+            // Copy face data
+            for data in self.face_data.iter_mut() {
+                assign_row(data, unused_face.0, last_face.0);
+            }
+        }
+
+        // Now remove the last face
+        self.face_he.pop();
+        for data in self.face_data.iter_mut() {
+            pop_array(Axis(0), data);
+        }
+    }
+
+    // Remove a vertex that is not being used
+    #[allow(unreachable_code)]
+    fn unchecked_remove_vertex(&mut self, unused_vertex: Vertex) {
+        debug_assert!(self.halfedges().all(|he| self.is_invalid(he.edge()) || self.start(he) != unused_vertex), "Vertex should be unused");
+
+        let last_vertex = Vertex(self.num_vertices() - 1);
+        if unused_vertex != last_vertex {
+            // Update all references to last_vertex
+            todo!("This needs a way to get incident halfedges");
+            // Copy vertex data
+            for data in self.face_data.iter_mut() {
+                assign_row(data, unused_vertex.0, last_vertex.0);
+            }
+        }
+
+        // Remove the last vertex
+        for data in self.vertex_data.iter_mut() {
+            pop_array(Axis(0), data);
+        }
     }
 
     /// Split all faces in the partition by treating zeros of a function as edges.
@@ -559,9 +772,10 @@ impl Partition {
             if let Some(he1) = iter.find(|he| zero_vertices[self.start(*he).0]) {
                 if let Some(_) = iter.find(|he| !zero_vertices[self.start(*he).0]) {
                     if let Some(he2) = iter.find(|he| zero_vertices[self.start(*he).0]) {
-                        // TODO: handle case where he2 is consecutive to more zeros and to he1.
-                        // This can only happen when there are multiple vertices in a line.
-                        self.split_face(he1, he2, edge_label);
+                        // There should be non-zero vertices between he2 and h1 as well
+                        if iter.find(|he| !zero_vertices[self.start(*he).0]).is_some() || he1 != self.halfedge_on_face(face) {
+                            self.split_face(he1, he2, edge_label);
+                        }
                     }
                 }
             }
@@ -671,6 +885,26 @@ impl Partition {
                 }
             }
         }
+
+        // We might have made unnecessary splits. We can undo these by merging faces with the same argmax
+        /*
+        let mut edge = initial_num_edges; // Note: we only need to check new edges
+        let mut removed_edges = vec![];
+        while edge < self.num_edges() {
+            let is_new_edge = self.edge_label[edge] == self.num_layers();
+            if let (Some(face1), Some(face2)) = self.edge_faces(edge) {
+                if face1 != face2 && face_argmax[face1] == face_argmax[face2] {
+                    self.merge_faces(edge, &mut removed_edges);
+                }
+            }
+            let same_argmax = face_argmax[edge.]
+            if is_new_edge && same_argmax {
+            }
+        }
+        // remove edges
+        self.remove_edges(removed_edges);
+        */
+
         // sanity check
         if cfg!(debug_assertions) {
             let acts = self.activations(layer);
@@ -682,12 +916,12 @@ impl Partition {
         }
         // return max
         Array1::from_vec(splitter.max_so_far)
-        
+
         // alternative algorithm:
         //  * for every vertex+dim: track if it is equal to max
         //  * for every edge (a,b): if is_max mask(a) ∩ is_max_mask(b) = ∅: find all changes
-        //    * 
-        //  * split faces 
+        //    *
+        //  * split faces
         //    * maybe also split the newly introduced edge needed, and repeat
     }
 
@@ -713,7 +947,7 @@ impl Partition {
     }
 
     // Neural network operations
-    
+
     /// Update partition by adding a ReLU layer, that takes as input the output of the given layer.
     pub fn relu_at(&mut self, layer: usize) {
         // Split faces
@@ -859,7 +1093,10 @@ impl<'a> Iterator for HalfedgesOnFace<'a> {
 
 #[cfg(test)]
 mod test {
+    use std::f32::consts::TAU;
+
     use ndarray::{stack, Array1};
+    use rand::Rng;
     use rand::{rngs::SmallRng, SeedableRng};
 
     use crate::{nn::NNModule, svg::SvgOptions};
@@ -883,13 +1120,13 @@ mod test {
     #[test]
     fn split_edge() {
         fn check_split_edge(mut p: Partition, edge: Edge, t: f32) {
-            let faces = p.edge_optfaces(edge);
+            let faces = p.edge_faces(edge);
             let (was_split, v, he1, he2) = p.split_edge(edge, t);
             //println!("split_edge {edge:?} at {t}\n{p:?}");
             p.check_invariants();
             assert_eq!(was_split, t != 0.0 && t != 1.0);
             assert_ne!(he1, he2);
-            assert_eq!(faces, (p.optface(he1), p.optface(he2)));
+            assert_eq!(faces, (p.face(he1), p.face(he2)));
             assert_eq!(p.start(he1), v);
             assert_eq!(p.start(he2), v);
         }
@@ -904,8 +1141,7 @@ mod test {
 
     #[test]
     fn split_face() {
-        for p in [Partition::square(2.0)] {
-            let mut p = p.clone();
+        for mut p in [Partition::square(2.0)] {
             let a = p.halfedge_on_face(Face(0));
             let b = p.next(p.next(a));
             println!("Before split {a:?}-{b:?}\n{p:?}");
@@ -913,6 +1149,117 @@ mod test {
             println!("split_face {a:?}-{b:?}\n{p:?}");
             p.check_invariants();
         }
+    }
+
+    #[test]
+    #[should_panic]
+    fn degenerate_split_face() {
+        for mut p in [Partition::square(2.0)] {
+            let a = p.halfedge_on_face(Face(0));
+            let b = p.next(a);
+            p.split_face(a, b, EdgeLabel::default());
+        }
+    }
+
+    #[test]
+    fn merge_face() {
+        let mut rng = SmallRng::seed_from_u64(42);
+        for mut p in test_cases(true, true) {
+            let mut failures = 0;
+            while failures < 10 {
+                // merge random edges until there are only boundary edges
+                let edge = Edge(rng.gen_range(0..p.num_edges()));
+                if p.is_boundary(edge) || p.is_invalid(edge) || p.edge_faces(edge).0 == p.edge_faces(edge).1 {
+                    failures += 1;
+                } else {
+                    p.merge_faces(edge);
+                    p.check_invariants();
+                    p.remove_invalid_edges();
+                    p.check_invariants();
+                }
+            }
+            println!("");
+        }
+    }
+
+    // test a merge_faces that creates a degenerate edge
+    #[test]
+    fn merge_face_simple() {
+        let mut p = Partition::square(1.0);
+        let a = p.halfedge_on_face(Face(0));
+        let b = p.next(p.next(a));
+        let (_,new_edge) = p.split_face(a, b, EdgeLabel::default());
+        p.split_edge(new_edge, 0.5);
+        println!("Before: {p:?}");
+        p.merge_faces(new_edge);
+        println!("After: {p:?}");
+        p.check_invariants();
+    }
+
+    fn test_cases(edge_splits: bool, face_splits: bool) -> Vec<Partition> {
+        let mut out = vec![];
+        out.push(Partition::square(2.0));
+        if face_splits {
+            let mut p = Partition::square(2.0);
+            let a = p.halfedge_on_face(Face(0));
+            let b = p.next(p.next(a));
+            p.split_face(a, b, EdgeLabel::default());
+            out.push(p);
+        }
+        let mut rng = SmallRng::seed_from_u64(42);
+        for steps in [0,2,4,8,16,32,64,128] {
+            out.push(random_partition(steps, edge_splits, face_splits, &mut rng));
+        }
+        out
+    }
+
+    // Random repeated edge and face splits
+    fn random_partition<R: Rng + ?Sized>(steps: usize, edge_splits: bool, face_splits: bool, rng: &mut R) -> Partition {
+        // start with a random polygon
+        let mut p =
+            if rng.gen_bool(0.5) {
+                Partition::square(rng.gen_range(0.5..5.0))
+            } else {
+                let n = rng.gen_range(3..7);
+                let mut points = Array2::zeros((n,2));
+                for i in 0..n {
+                    let r = rng.gen_range(0.8..1.2);
+                    let a = rng.gen_range(-0.1..0.1) + (i as f32 / n as f32) * TAU;
+                    points[(i,0)] = f32::cos(a) * r;
+                    points[(i,1)] = f32::sin(a) * r;
+                }
+                Partition::from_polygon(points)
+            };
+        // repeatedly split edges and faces
+        for _ in 0..steps {
+            // pick an edge at random to split
+            if edge_splits && rng.gen_bool(0.6) {
+                let edge = Edge(rng.gen_range(0..p.num_edges()));
+                p.split_edge(edge, rng.gen_range(0.1..0.9));
+            } else if face_splits {
+                let face = Face(rng.gen_range(0..p.num_faces()));
+                // find two halfedges on this face
+                let halfedges = Vec::from_iter(p.halfedges_on_face(face));
+                if halfedges.len() >= 4 {
+                    let a = rng.gen_range(0..halfedges.len());
+                    let b = rng.gen_range(2..halfedges.len() - 1);
+                    p.split_face(halfedges[a], halfedges[(a+b) % halfedges.len()], EdgeLabel::default());
+                }
+            }
+        }
+        p.check_invariants();
+        p
+    }
+
+    #[test]
+    fn random_partition_test() {
+        let mut rng = SmallRng::seed_from_u64(44);
+        let p = random_partition(200, true, true, &mut rng);
+        println!("{} vertices, {} edges, {} faces", p.num_vertices(), p.num_edges(), p.num_faces());
+        // hack: write to file
+        use std::fs::File;
+        let mut file = File::create("random_partition.svg").expect("Can't create file");
+        SvgOptions::new().write_svg(&p, &mut file).unwrap();
     }
 
     #[test]

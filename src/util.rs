@@ -2,8 +2,9 @@
 
 use std::cmp::Ordering;
 
-use ndarray::{Array, Array1, Array2, Array3, ArrayView, ArrayView1, Axis, Dimension, RemoveAxis};
+use ndarray::{s, Array, Array1, Array2, Array3, ArrayView, ArrayView1, Axis, Dimension, RemoveAxis, Slice, SliceArg, SliceInfo, SliceInfoElem};
 use num_traits::Zero;
+use numpy::{Ix1, Ix2, Ix3};
 
 pub fn relu<D: Dimension>(arr: &ArrayView<f32, D>) -> Array<f32, D> {
     arr.mapv(|x| x.max(0.0))
@@ -38,4 +39,38 @@ pub(crate) fn select_in_rows<T, D>(axis: Axis, arr: &ArrayView<T, D>, idxs: Arra
         out_row.assign(&in_row.index_axis(Axis(axis.0-1), idx));
     }
     out
+}
+
+/// Remove the last row from an array
+pub(crate) fn pop_array<T, D: Dimension>(axis: Axis, arr: &mut Array<T, D>) {
+    arr.slice_axis_inplace(axis, Slice::new(0, Some(-1), 1));
+}
+
+// Workaround to construct s![i, .., .., ..] with the right dimension
+pub(crate) trait SliceArg0 where Self: Dimension {
+    type Arg: SliceArg<Self>;
+    fn slice_arg_axis_0(i: usize) -> Self::Arg;
+}
+impl SliceArg0 for Ix2 {
+    type Arg = SliceInfo<[SliceInfoElem; 2], Ix2, Ix1>;
+
+    fn slice_arg_axis_0(i: usize) -> Self::Arg {
+        s![i, ..]
+    }
+}
+impl SliceArg0 for Ix3 {
+    type Arg = SliceInfo<[SliceInfoElem; 3], Ix3, Ix2>;
+
+    fn slice_arg_axis_0(i: usize) -> Self::Arg {
+        s![i, .., ..]
+    }
+}
+
+/// Copy a row/slice in a multidimensional array:
+/// arr[tgt] = arr[src]
+pub(crate) fn assign_row<T: Clone, D: Dimension + SliceArg0>(arr: &mut Array<T, D>, tgt: usize, src: usize) {
+    let tgt_slice = <D as SliceArg0>::slice_arg_axis_0(tgt);
+    let src_slice = <D as SliceArg0>::slice_arg_axis_0(src);
+    let (mut tgt_row, src_row) = arr.multi_slice_mut((tgt_slice, src_slice));
+    tgt_row.assign(&src_row);
 }
