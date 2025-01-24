@@ -1,25 +1,30 @@
 // This module defines a halfedge data structure for partitioning 2d space.
 
+use std::cmp::Ordering;
 use std::fmt::Debug;
 use ndarray::{array, concatenate, s, stack, Array, Array1, Array2, Array3, ArrayView1, ArrayView2, ArrayView3, ArrayViewMut2, Axis, NewAxis};
 use approx::assert_abs_diff_eq;
 
-use crate::util::{leaky_relu, relu};
+use crate::util::*;
+
+// Index types
+
+type Index = usize;
 
 #[derive(Copy, Clone, PartialEq, Eq)]
-pub struct Vertex(usize);
+pub struct Vertex(Index);
 
 #[derive(Copy, Clone, PartialEq, Eq)]
-pub struct Halfedge(usize);
+pub struct Halfedge(Index);
 
 #[derive(Copy, Clone, PartialEq, Eq)]
-pub struct Edge(usize);
+pub struct Edge(Index);
 
 #[derive(Copy, Clone, PartialEq, Eq)]
-pub struct Face(usize);
+pub struct Face(Index);
 
 #[derive(Copy, Clone, PartialEq, Eq)]
-struct OptFace(usize);
+struct OptFace(Index);
 
 impl From<Vertex> for usize {
     fn from(vertex: Vertex) -> Self {
@@ -141,9 +146,9 @@ enum LayerType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct EdgeLabel {
     /// Layer on which this edge was introduced
-    layer: usize,
+    pub layer: usize,
     /// Dimension of that layer which caused this edge to be created
-    dim: usize,
+    pub dim: usize,
 }
 
 /// A partition of 2d space.
@@ -297,6 +302,9 @@ impl Partition {
     }
     fn edge_optfaces(&self, edge: Edge) -> (OptFace, OptFace) {
         (self.optface(edge.halfedge(0)), self.optface(edge.halfedge(1)))
+    }
+    pub fn edge_label(&self, edge: Edge) -> &EdgeLabel {
+        &self.edge_label[edge.0]
     }
     pub fn halfedge_on_face(&self, face: Face) -> Halfedge {
         self.face_he[face.0]
@@ -513,11 +521,7 @@ impl Partition {
     /// Split all faces in the partition by treating zeros of a function as edges.
     /// Requires that there is at most 1 zero crossing per edge.
     /// The function split(a,b) should return Some(t) if f(lerp(a,b,t)) == 0
-    fn split_by<Split,OnSplit>(&mut self, mut split: Split, mut on_split: OnSplit, edge_label: EdgeLabel)
-        where
-        Split: FnMut(&Self, Vertex, Vertex) -> Option<f32>,
-        OnSplit: FnMut(&mut Self, Vertex)
-    {
+    fn split_all<E: EdgeSplitter>(&mut self, splitter: &mut E, edge_label: EdgeLabel) {
         // Split edges such that all zeros of the function go through vertices.
         let mut zero_vertices = vec![false; self.num_vertices()];
         // Note: splitting can add more edges, only iterate up to number of edges we had before we started
@@ -526,12 +530,12 @@ impl Partition {
             let (a,b) = self.endpoints(edge);
             if zero_vertices[a.0] || zero_vertices[b.0] {
                 // already have a zero crossing on this edge
-            } else if let Some(t) = split(self, a, b) {
+            } else if let Some(t) = splitter.split_point(self, a, b) {
                 // split at t
-                let (was_split, new_vertex, _he1, _he2) = self.split_edge(edge, t);
+                let (was_split, new_vertex, _, _) = self.split_edge(edge, t);
                 if was_split {
                     zero_vertices.push(true);
-                    on_split(self, new_vertex);
+                    splitter.apply_split(self, new_vertex, t);
                 } else {
                     zero_vertices[new_vertex.0] = true;
                 }
@@ -554,24 +558,38 @@ impl Partition {
         }
     }
 
+    /// Split faces by adding an edge between any two non-adjacent vertices a,b that have:
+    ///  f(a) = f(b) > 0
+    ///  a vertex c on a..b and a vertex d on b..a have f(c) != f(a) and f(c) != f(a)
+    fn split_faces() {
+
+    }
+
     /// Split all faces in the partition by treating zeros of the given layer as edges.
     fn split_by_zero_at(&mut self, layer: usize) {
         // Split faces on activation = 0
         let acts = self.activations(layer);
         for dim in 0..acts.len_of(Axis(1)) {
             let edge_label = EdgeLabel { layer: self.num_layers(), dim };
-            self.split_by(
-                |slf, a, b| {
-                    let acts = slf.activations_last();
-                    find_zero(acts[[a.0, dim]], acts[[b.0, dim]])
-                },
-                |slf, new_vertex| {
+            struct ZeroSplitter {
+                layer: usize,
+                dim: usize,
+                // Note: could track which vertices are non-negative to make relu mask
+            }
+            impl EdgeSplitter for ZeroSplitter {
+                fn split_point(&self, partition: &Partition, a: Vertex, b: Vertex) -> Option<f32> {
+                    let acts = &partition.vertex_data[self.layer];
+                    find_zero(acts[(a.0, self.dim)], acts[(b.0, self.dim)])
+                }
+                fn apply_split(&mut self, partition: &mut Partition, new_vertex: Vertex, _point: f32) {
                     // make sure that new vertices are actually 0 in dimension dim
                     // this may not be true exactly because of rounding errors.
-                    let acts = &mut slf.vertex_data[layer];
-                    acts[(new_vertex.0, dim)] = 0.0;
-                },
-                edge_label);
+                    let acts = &mut partition.vertex_data[self.layer];
+                    acts[(new_vertex.0, self.dim)] = 0.0;
+                }
+            }
+            let mut splitter = ZeroSplitter { layer, dim };
+            self.split_all(&mut splitter, edge_label);
         }
     }
 
@@ -589,6 +607,99 @@ impl Partition {
             }
         }
         mask
+    }
+
+    /// Aplit all faces in the partition at points where argmax of dims changes
+    fn split_by_argmax_at(&mut self, layer: usize) -> Array1<f32> {
+        // It is hard to do this fully correctly
+        // approximate algorithm:
+        //  * sort dims by most likely to contain maximum (to avoid unnecesary splits)
+        //  * for each dim: split_by difference of that dim and current max
+        // this might introduce some unnecessary splits
+
+        // for each vertex: find argmax
+        let acts = self.activations(layer);
+        let vertex_argmax = acts.rows().into_iter().map(argmax).collect::<Vec<usize>>();
+        // sort dims by frequency
+        let histogram_argmax = histogram(&vertex_argmax, acts.ncols());
+        let mut dims = Vec::from_iter(0..histogram_argmax.len());
+        dims.sort_by(|i, j| histogram_argmax[*j].cmp(&histogram_argmax[*i])); // Note: reverse order
+
+        // split dims
+        struct MaxSplitter {
+            //argmax_so_far: usize,
+            layer: usize,
+            dim: usize,
+            max_so_far: Vec<f32>,
+        }
+        impl EdgeSplitter for MaxSplitter {
+            fn split_point(&self, partition: &Partition, a: Vertex, b: Vertex) -> Option<f32> {
+                // split by zeros of (acts[:,dim] - max_so_far)
+                let acts = &partition.vertex_data[self.layer];
+                find_zero(acts[(a.0, self.dim)] - self.max_so_far[a.0], acts[(b.0, self.dim)] - self.max_so_far[b.0])
+            }
+            fn apply_split(&mut self, partition: &mut Partition, new_vertex: Vertex, _t: f32) {
+                let acts = &mut partition.vertex_data[self.layer];
+                self.max_so_far.push(acts[(new_vertex.0, self.dim)]);
+            }
+        }
+        let mut splitter = MaxSplitter {
+            layer,
+            dim: dims[0],
+            max_so_far: acts.column(dims[0]).to_vec(),
+            //argmax_so_far: vec![dims[0]; acts.nrows()];
+        };
+        for &dim in &dims[1..] {
+            let edge_label = EdgeLabel { layer: self.num_layers(), dim };
+            splitter.dim = dim;
+            self.split_all(&mut splitter, edge_label);
+            // update max_so_far
+            let acts = self.activations(layer);
+            for (m, x) in splitter.max_so_far.iter_mut().zip(acts.index_axis(Axis(1), dim).iter()) {
+                if *m < *x {
+                    *m = *x;
+                }
+            }
+        }
+        // sanity check
+        if cfg!(debug_assertions) {
+            let acts = self.activations(layer);
+            for (row, max) in acts.axis_iter(Axis(0)).zip(splitter.max_so_far.iter()) {
+                if row.iter().all(|x| x < max) {
+                    println!("Bad maximum: {row} < {max}");
+                }
+            }
+        }
+        // return max
+        Array1::from_vec(splitter.max_so_far)
+        
+        // alternative algorithm:
+        //  * for every vertex+dim: track if it is equal to max
+        //  * for every edge (a,b): if is_max mask(a) ∩ is_max_mask(b) = ∅: find all changes
+        //    * 
+        //  * split faces 
+        //    * maybe also split the newly introduced edge needed, and repeat
+    }
+
+    fn argmax_face_mask(&self, layer: usize, max: &[f32]) -> Array2<bool> {
+        let acts = self.activations(layer);
+        let mut mask = Array2::from_elem((self.num_faces(), acts.ncols()), true);
+        let eps = 1e-6;
+        for he in self.halfedges() {
+            if let Some(face) = self.face(he) {
+                let max = max[self.start(he).0];
+                mask.row_mut(face.0).zip_mut_with(&acts.row(self.start(he).0),
+                    |m, x| *m &= *x >= max - eps
+                );
+            }
+        }
+        mask
+    }
+    fn argmax_face_index(&self, layer: usize, max: &[f32]) -> Array1<usize> {
+        let mask = self.argmax_face_mask(layer, max);
+        Array1::from_iter(mask.rows().into_iter().map(
+            |row| row.iter().position(|x| *x).expect("Face has inconsistent argmax")
+        ))
     }
 
     // Neural network operations
@@ -627,6 +738,35 @@ impl Partition {
     }
     pub fn leaky_relu(&mut self, negative_slope: f32) {
         self.leaky_relu_at(self.last_layer(), negative_slope);
+    }
+
+    pub fn max_pool_at(&mut self, layer: usize) {
+        let max = self.split_by_argmax_at(layer);
+        // New face data takes the given dim
+        let face_argmax = self.argmax_face_index(layer, max.as_slice().unwrap());
+        let face_data = &self.face_data[layer];
+        let face_data = select_in_rows(Axis(2), &face_data.view(), face_argmax);
+        self.face_data.push(face_data.insert_axis(Axis(2)));
+        // New vertex data is just the max value
+        self.vertex_data.push(max.insert_axis(Axis(1)));
+    }
+    pub fn max_pool(&mut self) {
+        self.max_pool_at(self.last_layer());
+    }
+
+    pub fn arg_max_pool_at(&mut self, layer: usize) {
+        let max = self.split_by_argmax_at(layer);
+        // New face data takes the given dim
+        let face_argmax = self.argmax_face_index(layer, max.as_slice().unwrap());
+        let face_data = concatenate![Axis(1),
+            Array::zeros((self.num_faces(), 2)),
+            face_argmax.insert_axis(Axis(1)).mapv(|x| x as f32)
+        ];
+        self.face_data.push(face_data.insert_axis(Axis(2)));
+        // New vertex data is just the max value
+        let acts = self.activations(layer);
+        let vertex_argmax = Array::from_iter(acts.rows().into_iter().map(|row| argmax(row) as f32));
+        self.vertex_data.push(vertex_argmax.insert_axis(Axis(1)));
     }
 
     /// Append a layer that computes output using the given function.
@@ -671,6 +811,12 @@ impl Partition {
     pub fn residual(&mut self, layer: usize) {
         self.sum(layer, self.last_layer());
     }
+}
+
+/// Trait for deciding to split an edge
+trait EdgeSplitter {
+    fn split_point(&self, partition: &Partition, a: Vertex, b: Vertex) -> Option<f32>;
+    fn apply_split(&mut self, partition: &mut Partition, new_vertex: Vertex, t: f32);
 }
 
 /// Iterator for all halfedges that form a face
@@ -819,6 +965,37 @@ mod test {
         if p.num_faces() < 10000 {
             use std::fs::File;
             let mut file = File::create("random_nn.svg").expect("Can't create file");
+            SvgOptions::new().write_svg(&p, &mut file).unwrap();
+        }
+    }
+
+    #[test]
+    fn max_pool() {
+        let mut rng = SmallRng::seed_from_u64(42);
+        let dim_in = 2;
+        let dim_hidden = 10;
+        let dim_out = 10;
+        //let dim_hidden = 3;
+        //let dim_out = 4;
+        // two layer network
+        let mut p = Partition::square(1.0);
+        crate::nn::Linear::new_uniform(dim_in, dim_hidden, &mut rng).apply(&mut p);
+        p.relu();
+        p.check_invariants();
+        println!("{} faces after relu", p.num_faces());
+        crate::nn::Linear::new_uniform(dim_hidden, dim_out, &mut rng).apply(&mut p);
+        if true {
+            use std::fs::File;
+            let mut file = File::create("max_pool_pre.svg").expect("Can't create file");
+            SvgOptions::new().write_svg(&p, &mut file).unwrap();
+        }
+        p.check_invariants();
+        p.max_pool();
+        p.check_invariants();
+        println!("{} faces", p.num_faces());
+        if true {
+            use std::fs::File;
+            let mut file = File::create("max_pool.svg").expect("Can't create file");
             SvgOptions::new().write_svg(&p, &mut file).unwrap();
         }
     }
