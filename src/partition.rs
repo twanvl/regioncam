@@ -554,13 +554,11 @@ impl Partition {
         }
     }
 
-    /*struct Remover<'a> {
-        partition: &Partition,
-        removed_edges:
-    }*/
     /// Merge two faces by removing the edge between them.
     /// This function only marks the edge as invalid, without actually removing it, because that would mess up the order of edges.
-    pub fn merge_faces(&mut self, edge: Edge) {
+    ///
+    /// Returns: removed face. After this call the removed face is replaced by the last face
+    pub fn merge_faces(&mut self, edge: Edge) -> Face{
         let face0 = self.face(edge.halfedge(0)).expect("Can't merge with outside face");
         let face1 = self.face(edge.halfedge(1)).expect("Can't merge with outside face");
         assert_ne!(face0, face1, "Can't merge edges within a face");
@@ -625,8 +623,7 @@ impl Partition {
         }
         remove_degenerate_edges(self, p0, face0);
         remove_degenerate_edges(self, p1, face0);
-
-        self.unchecked_remove_edge(edge);
+        face1
     }
 
     /// Mark an edge as removed/invalid
@@ -834,88 +831,98 @@ impl Partition {
     }
 
     /// Aplit all faces in the partition at points where argmax of dims changes
-    fn split_by_argmax_at(&mut self, layer: usize) -> Array1<f32> {
+    /// Returns: (vertex_max, face_argmax)
+    fn split_by_argmax_at(&mut self, layer: usize) -> (Array1<f32>, Array1<usize>) {
         // It is hard to do this fully correctly
         // approximate algorithm:
         //  * sort dims by most likely to contain maximum (to avoid unnecesary splits)
         //  * for each dim: split_by difference of that dim and current max
         // this might introduce some unnecessary splits
 
-        // for each vertex: find argmax
         let acts = self.activations(layer);
-        let vertex_argmax = acts.rows().into_iter().map(argmax).collect::<Vec<usize>>();
-        // sort dims by frequency
-        let histogram_argmax = histogram(&vertex_argmax, acts.ncols());
-        let mut dims = Vec::from_iter(0..histogram_argmax.len());
-        dims.sort_by(|i, j| histogram_argmax[*j].cmp(&histogram_argmax[*i])); // Note: reverse order
+        let dims = {
+            // for each vertex: find argmax
+            let vertex_argmax = acts.rows().into_iter().map(argmax).collect::<Vec<usize>>();
+            // sort dims by frequency
+            let histogram_argmax = histogram(&vertex_argmax, acts.ncols());
+            let mut dims = Vec::from_iter(0..histogram_argmax.len());
+            dims.sort_by(|i, j| histogram_argmax[*j].cmp(&histogram_argmax[*i])); // Note: reverse order
+            dims
+        };
 
         // split dims
-        struct MaxSplitter {
-            //argmax_so_far: usize,
-            layer: usize,
-            dim: usize,
-            max_so_far: Vec<f32>,
-        }
-        impl EdgeSplitter for MaxSplitter {
-            fn split_point(&self, partition: &Partition, a: Vertex, b: Vertex) -> Option<f32> {
-                // split by zeros of (acts[:,dim] - max_so_far)
-                let acts = &partition.vertex_data[self.layer];
-                find_zero(acts[(a.0, self.dim)] - self.max_so_far[a.0], acts[(b.0, self.dim)] - self.max_so_far[b.0])
+        let initial_num_edges = self.num_edges();
+        let label_layer = self.num_layers();
+        let vertex_max = {
+            struct MaxSplitter {
+                //argmax_so_far: usize,
+                layer: usize,
+                dim: usize,
+                max_so_far: Vec<f32>,
             }
-            fn apply_split(&mut self, partition: &mut Partition, new_vertex: Vertex, _t: f32) {
-                let acts = &mut partition.vertex_data[self.layer];
-                self.max_so_far.push(acts[(new_vertex.0, self.dim)]);
-            }
-        }
-        let mut splitter = MaxSplitter {
-            layer,
-            dim: dims[0],
-            max_so_far: acts.column(dims[0]).to_vec(),
-            //argmax_so_far: vec![dims[0]; acts.nrows()];
-        };
-        for &dim in &dims[1..] {
-            let edge_label = EdgeLabel { layer: self.num_layers(), dim };
-            splitter.dim = dim;
-            self.split_all(&mut splitter, edge_label);
-            // update max_so_far
-            let acts = self.activations(layer);
-            for (m, x) in splitter.max_so_far.iter_mut().zip(acts.index_axis(Axis(1), dim).iter()) {
-                if *m < *x {
-                    *m = *x;
+            impl EdgeSplitter for MaxSplitter {
+                fn split_point(&self, partition: &Partition, a: Vertex, b: Vertex) -> Option<f32> {
+                    // split by zeros of (acts[:,dim] - max_so_far)
+                    let acts = &partition.vertex_data[self.layer];
+                    find_zero(acts[(a.0, self.dim)] - self.max_so_far[a.0], acts[(b.0, self.dim)] - self.max_so_far[b.0])
+                }
+                fn apply_split(&mut self, partition: &mut Partition, new_vertex: Vertex, _t: f32) {
+                    let acts = &mut partition.vertex_data[self.layer];
+                    self.max_so_far.push(acts[(new_vertex.0, self.dim)]);
                 }
             }
-        }
+            let mut splitter = MaxSplitter {
+                layer,
+                dim: dims[0],
+                max_so_far: acts.column(dims[0]).to_vec(),
+                //argmax_so_far: vec![dims[0]; acts.nrows()];
+            };
+            for &dim in &dims[1..] {
+                let edge_label = EdgeLabel { layer: label_layer, dim };
+                splitter.dim = dim;
+                self.split_all(&mut splitter, edge_label);
+                // update max_so_far
+                let acts = self.activations(layer);
+                for (m, x) in splitter.max_so_far.iter_mut().zip(acts.index_axis(Axis(1), dim).iter()) {
+                    if *m < *x {
+                        *m = *x;
+                    }
+                }
+            }
+            splitter.max_so_far
+        };
 
         // We might have made unnecessary splits. We can undo these by merging faces with the same argmax
-        /*
-        let mut edge = initial_num_edges; // Note: we only need to check new edges
-        let mut removed_edges = vec![];
-        while edge < self.num_edges() {
-            let is_new_edge = self.edge_label[edge] == self.num_layers();
-            if let (Some(face1), Some(face2)) = self.edge_faces(edge) {
-                if face1 != face2 && face_argmax[face1] == face_argmax[face2] {
-                    self.merge_faces(edge, &mut removed_edges);
+        let face_argmax = {
+            let mut face_argmax = self.argmax_face_index(layer, &vertex_max);
+            // Note: we only need to check new edges
+            for edge in (initial_num_edges..self.num_edges()).map(Edge) {
+                if !self.is_invalid(edge) && self.edge_label(edge).layer == label_layer {
+                    // this is a new edge, consider it for merger
+                    if let (Some(face1), Some(face2)) = self.edge_faces(edge) {
+                        if face1 != face2 && face_argmax[face1.0] == face_argmax[face2.0] {
+                            let removed_face = self.merge_faces(edge);
+                            face_argmax.swap_remove(removed_face.0);
+                        }
+                    }
                 }
             }
-            let same_argmax = face_argmax[edge.]
-            if is_new_edge && same_argmax {
-            }
-        }
-        // remove edges
-        self.remove_edges(removed_edges);
-        */
+            // TODO: we could also unsplit edges.
+            self.remove_invalid_edges();
+            face_argmax
+        };
 
         // sanity check
         if cfg!(debug_assertions) {
             let acts = self.activations(layer);
-            for (row, max) in acts.axis_iter(Axis(0)).zip(splitter.max_so_far.iter()) {
+            for (row, max) in acts.axis_iter(Axis(0)).zip(vertex_max.iter()) {
                 if row.iter().all(|x| x < max) {
                     println!("Bad maximum: {row} < {max}");
                 }
             }
         }
         // return max
-        Array1::from_vec(splitter.max_so_far)
+        (Array1::from_vec(vertex_max), Array1::from_vec(face_argmax))
 
         // alternative algorithm:
         //  * for every vertex+dim: track if it is equal to max
@@ -939,9 +946,9 @@ impl Partition {
         }
         mask
     }
-    fn argmax_face_index(&self, layer: usize, max: &[f32]) -> Array1<usize> {
+    fn argmax_face_index(&self, layer: usize, max: &[f32]) -> Vec<usize> {
         let mask = self.argmax_face_mask(layer, max);
-        Array1::from_iter(mask.rows().into_iter().map(
+        Vec::from_iter(mask.rows().into_iter().map(
             |row| row.iter().position(|x| *x).expect("Face has inconsistent argmax")
         ))
     }
@@ -985,9 +992,8 @@ impl Partition {
     }
 
     pub fn max_pool_at(&mut self, layer: usize) {
-        let max = self.split_by_argmax_at(layer);
+        let (max, face_argmax) = self.split_by_argmax_at(layer);
         // New face data takes the given dim
-        let face_argmax = self.argmax_face_index(layer, max.as_slice().unwrap());
         let face_data = &self.face_data[layer];
         let face_data = select_in_rows(Axis(2), &face_data.view(), face_argmax);
         self.face_data.push(face_data.insert_axis(Axis(2)));
@@ -999,9 +1005,8 @@ impl Partition {
     }
 
     pub fn argmax_pool_at(&mut self, layer: usize) {
-        let max = self.split_by_argmax_at(layer);
+        let (_max, face_argmax) = self.split_by_argmax_at(layer);
         // New face data takes the given dim
-        let face_argmax = self.argmax_face_index(layer, max.as_slice().unwrap());
         let face_data = concatenate![Axis(1),
             Array::zeros((self.num_faces(), 2)),
             face_argmax.insert_axis(Axis(1)).mapv(|x| x as f32)
