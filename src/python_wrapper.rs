@@ -184,34 +184,39 @@ mod regioncam {
         /// Parameters:
         ///  * `layer`:        network or layer(s) to apply
         ///  * `input_layer``: use the output of the given layer as input (default: last layer).
+        /// Returns:
+        ///  * layer number of the output
         #[pyo3(signature=(layer, input_layer=None))]
-        fn add<'py>(&mut self, py: Python<'py>, layer: &Layer, input_layer: Option<usize>) -> PyResult<()> {
+        fn add<'py>(&mut self, py: Python<'py>, layer: &Layer, input_layer: Option<usize>) -> PyResult<usize> {
             let input_layer = input_layer.unwrap_or(self.partition.last_layer());
             match layer {
                 Layer::Linear { weight, bias } => {
                     let weight = weight.bind(py).readonly();
                     let bias   = bias.bind(py).readonly();
                     self.partition.linear_at(input_layer, &weight.as_array(), &bias.as_array());
+                    Ok(self.partition.last_layer())
                 }
                 Layer::ReLU() => {
                     self.partition.relu_at(input_layer);
+                    Ok(self.partition.last_layer())
                 }
                 Layer::LeakyReLU { negative_slope } => {
                     self.partition.leaky_relu_at(input_layer, *negative_slope);
+                    Ok(self.partition.last_layer())
                 }
                 Layer::Residual { layer } => {
-                    self.add(py, layer.get(), Some(input_layer))?;
-                    self.partition.residual(input_layer);
+                    let after_layer = self.add(py, layer.get(), Some(input_layer))?;
+                    self.partition.sum(input_layer, after_layer);
+                    Ok(self.partition.last_layer())
                 }
                 Layer::Sequential { layers } => {
                     let mut input_layer = input_layer;
                     for item in layers {
-                        self.add(py, item.get(), Some(input_layer))?;
-                        input_layer = self.partition.last_layer();
+                        input_layer = self.add(py, item.get(), Some(input_layer))?;
                     }
+                    Ok(input_layer)
                 }
             }
-            Ok(())
         }
     }
 
