@@ -240,6 +240,18 @@ impl Partition {
     pub fn square(size: f32) -> Self {
         Self::rectangle(-size, size, -size, size)
     }
+    /// Construct a partition with a regular polygon centered on the origin, approximating a circle
+    pub fn circle(radius: f32) -> Self {
+        use std::f32::consts::TAU;
+        let n = 90;
+        let mut points = Array2::zeros((n, 2));
+        for i in 0..n {
+            let t = i as f32 * (TAU / n as f32);
+            points[(i,0)] = radius * f32::cos(t);
+            points[(i,1)] = radius * f32::sin(t);
+        }
+        Self::from_polygon(points)
+    }
 
     // Accessors
 

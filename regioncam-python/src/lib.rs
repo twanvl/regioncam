@@ -32,6 +32,11 @@ mod regioncam {
         fn new(size: f32) -> Self {
             Self{ partition: Partition::square(size) }
         }
+        /// Create a Regioncam object with a circular region
+        #[staticmethod]
+        fn circle(radius: f32) -> Self {
+            Self{ partition: Partition::circle(radius) }
+        }
 
         /// The number of vertices in the partition.
         #[getter]
