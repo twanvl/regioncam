@@ -11,14 +11,12 @@ crate-type = ["cdylib"]
 approx = "0.5.1"
 colorgrad = "0.7.0"
 ndarray = { version = "0.16.1", features = ["approx"] }
-nonmax = "0.5.5"
 num-traits = "0.2.19"
 numpy = "0.23.0"
 pyo3 = { version = "0.23.4", features = ["extension-module"] }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_distr = "0.4.3"
 svg_fmt = "0.4.4"
-wasm-bindgen = "0.2.100"
 
 [profile.release]
 debug = true
