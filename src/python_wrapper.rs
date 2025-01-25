@@ -157,6 +157,48 @@ mod regioncam {
             self.partition.leaky_relu_at(input_layer, negative_slope)
         }
 
+        /// Add a max pooling layer.
+        ///
+        /// Parameters:
+        ///  * `input_layer``: use the output of the given layer as input (default: last layer).
+        #[pyo3(signature=(input_layer=None))]
+        fn max_pool(&mut self, input_layer: Option<usize>) {
+            let input_layer = input_layer.unwrap_or(self.partition.last_layer());
+            self.partition.max_pool_at(input_layer)
+        }
+
+        /// Add an argmax pooling layer. This can be used as a classification like softmax.
+        ///
+        /// Parameters:
+        ///  * `input_layer``: use the output of the given layer as input (default: last layer).
+        #[pyo3(signature=(input_layer=None))]
+        fn argmax_pool(&mut self, input_layer: Option<usize>) {
+            let input_layer = input_layer.unwrap_or(self.partition.last_layer());
+            self.partition.argmax_pool_at(input_layer)
+        }
+
+        /// Add an argmax pooling layer. This can be used as a classification like softmax.
+        ///
+        /// Parameters:
+        ///  * `input_layer``: use the output of the given layer as input (default: last layer).
+        #[pyo3(signature=(input_layer=None))]
+        fn sign(&mut self, input_layer: Option<usize>) {
+            let input_layer = input_layer.unwrap_or(self.partition.last_layer());
+            self.partition.sign_at(input_layer)
+        }
+
+        /// Add a decision boundary.
+        /// If the last layer has 1 ouptut use a sign classifier (hard sigmoid).
+        /// If the last layer has >1 output use an argmax classifier (hard softmax).
+        ///
+        /// Parameters:
+        ///  * `input_layer``: use the output of the given layer as input (default: last layer).
+        #[pyo3(signature=(input_layer=None))]
+        fn decision_boundary(&mut self, input_layer: Option<usize>) {
+            let input_layer = input_layer.unwrap_or(self.partition.last_layer());
+            self.partition.decision_boundary_at(input_layer)
+        }
+
         /// Add a new layer that applies a linear transformation,
         ///   x_out = x_in @ weight + bias
         ///

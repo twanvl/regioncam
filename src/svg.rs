@@ -144,7 +144,9 @@ fn bounding_box(p: &Partition) -> (Range<f32>, Range<f32>) {
 }
 
 fn value_range(data: &ArrayView2<f32>) -> Range<f32> {
-    data.iter().copied().fold(EMPTY_RANGE, minmax)
+    let mut range = data.iter().copied().fold(EMPTY_RANGE, minmax);
+    range.end += 1.0;
+    range
 }
 
 fn mean(iter: impl Iterator<Item=f32>) -> f32 {

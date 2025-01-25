@@ -1021,6 +1021,37 @@ impl Partition {
         self.argmax_pool_at(self.last_layer());
     }
 
+    pub fn sign_at(&mut self, layer: usize) {
+        // Split faces
+        self.split_by_zero_at(layer);
+        // Compute relu output for vertices
+        let acts = self.vertex_data[layer].view();
+        let new_vertex_data = acts.mapv(|x| if x >= 0.0 { 1.0 } else { 0.0 });
+        self.vertex_data.push(new_vertex_data);
+        // Apply mask to compute per-face activation
+        let face_mask = self.non_negative_face_mask(layer);
+        let face_data = concatenate![Axis(1),
+            Array::zeros((face_mask.len_of(Axis(0)), 2, face_mask.len_of(Axis(1)))),
+            face_mask.insert_axis(Axis(1)).mapv(|x| if x { 1.0 } else {0.0})
+        ];
+        self.face_data.push(face_data);
+    }
+    pub fn sign(&mut self) {
+        self.sign_at(self.last_layer())
+    }
+    
+    /// Append a classification layer: with 1 output a sign based classifier, with >1 outputs an argmax
+    pub fn decision_boundary_at(&mut self, layer: usize) {
+        if self.vertex_data[layer].ncols() == 1 {
+            self.sign_at(layer);
+        } else {
+            self.argmax_pool_at(layer);
+        }
+    }
+    pub fn decision_boundary(&mut self) {
+        self.decision_boundary_at(self.last_layer());
+    }
+    
     /// Append a layer that computes output using the given function.
     /// The function should be linear, without a bias term.
     /// Then `add_bias` should add the bias term
