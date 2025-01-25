@@ -7,7 +7,7 @@ Regioncam works by tracking the output of all neural network layers in the regio
 Compiling
 ---------
 
-Compiling Regioncam requires rust and `maturin`.
+Compiling Regioncam requires rust and [`maturin`](https://github.com/PyO3/maturin).
 ```
 maturin develop --release
 python
