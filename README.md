@@ -9,7 +9,7 @@ Compiling
 
 Compiling Regioncam requires rust and [`maturin`](https://github.com/PyO3/maturin).
 ```
-maturin develop --release
+maturin develop -m regioncam-python/Cargo.toml
 python
 ```
 

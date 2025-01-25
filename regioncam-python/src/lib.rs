@@ -1,24 +1,19 @@
 // Python wrapper
 use pyo3::prelude::*;
 use pyo3::types::PyList;
-use pyo3::exceptions::PyTypeError;
 use numpy::*;
-use std::{fs::File, ops::Range};
-use std::convert::AsRef;
+use std::fs::File;
 use std::fmt::Write;
 
-use crate::partition::{Face, Partition};
-use crate::svg::SvgOptions;
+use ndarray::{Dim, Dimension};
+use pyo3::exceptions::PyAttributeError;
+use pyo3::PyClass;
+use pyo3::{intern, types::PyString, DowncastError};
+
+use ::regioncam::*;
 
 #[pymodule(name = "regioncam")]
 mod regioncam {
-    use std::ops::Deref;
-
-    use ndarray::{Dim, Dimension};
-    use pyo3::exceptions::PyAttributeError;
-    use pyo3::{BoundObject, PyClass};
-    use pyo3::{intern, types::PyString, DowncastError};
-
     use super::*;
 
     #[pyclass]
@@ -375,8 +370,6 @@ mod regioncam {
 
     #[pymodule]
     mod nn {
-        use std::borrow::Cow;
-
         use super::*;
 
         /// A linear transformation
@@ -473,21 +466,18 @@ mod regioncam {
     }
 
     enum PyCow<'a, 'py, T> {
-        //Borrowed(Borrowed<'a, 'py, T>),
         Bound(&'a Bound<'py, T>),
         Owned(T),
     }
     impl<'a, 'py, T: PyClass + Into<PyClassInitializer<T>>> PyCow<'a, 'py, T> {
         fn into_bound(self, py: Python<'py>) -> PyResult<Bound<'py, T>> {
             match self {
-                //PyCow::Borrowed(value) => Ok(value.into_bound()),
                 PyCow::Bound(value) => Ok(value.clone()),
                 PyCow::Owned(value) => Bound::new(py, value),
             }
         }
         fn borrow(&'a self) -> PyCowRef<'a,T> {
             match self {
-                //PyCow::Borrowed(value) => PyCowRef::Bound(value.borrow()),
                 PyCow::Bound(value) => PyCowRef::Bound(value.borrow()),
                 PyCow::Owned(value) => PyCowRef::Owned(value),
             }
@@ -552,6 +542,4 @@ mod regioncam {
         todo!()
     }
 */
-    //to_svg:
-    // mark_points
 }

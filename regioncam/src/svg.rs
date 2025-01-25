@@ -1,10 +1,9 @@
 use std::{io::Write, ops::Range};
 use colorgrad::Gradient;
-use ndarray::{ArrayView2, Axis};
+use ndarray::ArrayView2;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use rand_distr::{Distribution, Uniform};
 use svg_fmt::*;
-use colorgrad::preset::SinebowGradient;
 
 use crate::partition::*;
 

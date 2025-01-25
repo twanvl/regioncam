@@ -2,9 +2,8 @@
 
 use std::cmp::Ordering;
 
-use ndarray::{s, Array, Array1, Array2, Array3, ArrayView, ArrayView1, Axis, Dimension, RemoveAxis, Slice, SliceArg, SliceInfo, SliceInfoElem};
+use ndarray::{s, Array, Array1, ArrayView, ArrayView1, Axis, Dimension, Ix1, Ix2, Ix3, RemoveAxis, Slice, SliceArg, SliceInfo, SliceInfoElem};
 use num_traits::Zero;
-use numpy::{Ix1, Ix2, Ix3};
 
 pub fn relu<D: Dimension>(arr: &ArrayView<f32, D>) -> Array<f32, D> {
     arr.mapv(|x| x.max(0.0))

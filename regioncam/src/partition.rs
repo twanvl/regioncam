@@ -1,8 +1,7 @@
 // This module defines a halfedge data structure for partitioning 2d space.
 
-use std::cmp::Ordering;
 use std::fmt::Debug;
-use ndarray::{array, concatenate, s, stack, Array, Array1, Array2, Array3, ArrayView, ArrayView1, ArrayView2, ArrayView3, ArrayViewMut2, Axis, Dimension, NewAxis, Slice, Zip};
+use ndarray::{array, concatenate, s, Array, Array1, Array2, Array3, ArrayView1, ArrayView2, ArrayView3, ArrayViewMut2, Axis, NewAxis};
 use approx::assert_abs_diff_eq;
 
 use crate::util::*;
