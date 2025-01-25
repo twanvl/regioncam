@@ -30,7 +30,7 @@ mod regioncam {
     #[pymethods]
     impl Regioncam {
         /// Create a Regioncam object.
-        /// 
+        ///
         /// Parameters:
         ///  * size: Size of the rectangle to cover.
         #[new]
@@ -104,7 +104,7 @@ mod regioncam {
         }
 
         /// Visualize the regions, and write this to an svg file.
-        /// 
+        ///
         /// Parameters:
         ///  * path:        path of the file to write to
         ///  * size:        width and height of the image in pixels
@@ -120,7 +120,7 @@ mod regioncam {
         }
 
         /// Get an svg representation of the regions.
-        /// 
+        ///
         /// Parameters:
         ///  * size:        width and height of the image in pixels
         ///  * line_width:  line width to use for edges
@@ -137,7 +137,7 @@ mod regioncam {
         // layers
 
         /// Add a new layer that applies a ReLU operation.
-        /// 
+        ///
         /// Parameters:
         ///  * `input_layer``: use the output of the given layer as input (default: last layer).
         #[pyo3(signature=(input_layer=None))]
@@ -147,7 +147,7 @@ mod regioncam {
         }
 
         /// Add a new layer that applies a LeakyReLU operation.
-        /// 
+        ///
         /// Parameters:
         ///  * `negative_slope`: multiplicative factor for negative inputs.
         ///  * `input_layer``: use the output of the given layer as input (default: last layer).
@@ -159,7 +159,7 @@ mod regioncam {
 
         /// Add a new layer that applies a linear transformation,
         ///   x_out = x_in @ weight + bias
-        /// 
+        ///
         /// Parameters:
         ///  * `weight`:       weight matrix
         ///  * `bias`:         bias vector
@@ -180,14 +180,20 @@ mod regioncam {
 
         /// Add a neural network or network layer.
         /// This function accepts layers from `regioncam.nn`, and lists of layers.
-        /// 
+        ///
         /// Parameters:
         ///  * `layer`:        network or layer(s) to apply
         ///  * `input_layer``: use the output of the given layer as input (default: last layer).
         /// Returns:
         ///  * layer number of the output
         #[pyo3(signature=(layer, input_layer=None))]
-        fn add<'py>(&mut self, py: Python<'py>, layer: &Layer, input_layer: Option<usize>) -> PyResult<usize> {
+        fn add<'a,'py>(&mut self, py: Python<'py>, #[pyo3(from_py_with="nn::to_layer")] layer: PyCow<'a, 'py, Layer>, input_layer: Option<usize>) -> PyResult<usize> {
+            self.add_layer(py, &layer.borrow(), input_layer)
+        }
+    }
+
+    impl Regioncam {
+        fn add_layer<'py>(&mut self, py: Python<'py>, layer: &Layer, input_layer: Option<usize>) -> PyResult<usize> {
             let input_layer = input_layer.unwrap_or(self.partition.last_layer());
             match layer {
                 Layer::Linear { weight, bias } => {
@@ -205,30 +211,20 @@ mod regioncam {
                     Ok(self.partition.last_layer())
                 }
                 Layer::Residual { layer } => {
-                    let after_layer = self.add(py, layer.get(), Some(input_layer))?;
+                    let after_layer = self.add_layer(py, layer.get(), Some(input_layer))?;
                     self.partition.sum(input_layer, after_layer);
                     Ok(self.partition.last_layer())
                 }
                 Layer::Sequential { layers } => {
                     let mut input_layer = input_layer;
                     for item in layers {
-                        input_layer = self.add(py, item.get(), Some(input_layer))?;
+                        input_layer = self.add_layer(py, item.get(), Some(input_layer))?;
                     }
                     Ok(input_layer)
                 }
             }
         }
     }
-
-    /*impl Regioncam {
-        fn add_list<'py>(&mut self, list: &Bound<'py, PyList>, mut input_layer: usize) -> PyResult<()> {
-            for item in list {
-                self.add(&item, Some(input_layer))?;
-                input_layer = self.partition.last_layer();
-            }
-            Ok(())
-        }
-    }*/
 
     #[pyclass(name="Face")]
     pub struct PyFace(Face);
@@ -379,12 +375,17 @@ mod regioncam {
         fn sequential(layers: Vec<Py<Layer>>) -> Layer {
             Layer::Sequential { layers }
         }
-        
+
         /// Convert a torch layer into a Regioncam layer
-        fn convert<'a,'py>(arg: &'a Bound<'py, PyAny>) -> PyResult<PyCow<'a, 'py, Layer>> {
+        #[pyfunction]
+        fn convert<'py>(arg: &Bound<'py, PyAny>) -> PyResult<Bound<'py, Layer>> {
+            to_layer(arg)?.into_bound(arg.py())
+        }
+
+        pub fn to_layer<'a,'py>(arg: &'a Bound<'py, PyAny>) -> PyResult<PyCow<'a, 'py, Layer>> {
             if let Ok(layer) = arg.downcast() {
                 Ok(PyCow::Bound(layer))
-            } else if qualname(arg) == "torch.nn.Linear" {
+            } else if qualname(arg) == "torch.nn.modules.linear.Linear" {
                 let weight = arg.getattr(intern!(arg.py(), "weight"))?;
                 let weight = downcast_array(&weight)?;
                 let bias = arg.getattr(intern!(arg.py(), "bias"))?;
@@ -392,18 +393,24 @@ mod regioncam {
                 // pytorch has transposed weight matrix
                 let weight = weight.transpose()?;
                 Ok(PyCow::Owned(linear(weight, bias)))
-            } else if qualname(arg) == "torch.nn.ReLU" {
+            } else if qualname(arg) == "torch.nn.modules.activation.ReLU" {
                 Ok(PyCow::Owned(relu()))
-            } else if qualname(arg) == "torch.nn.LeakyReLU" {
+            } else if qualname(arg) == "torch.nn.modules.activation.LeakyReLU" {
                 let negative_slope = arg.getattr(intern!(arg.py(), "negative_slope"))?.extract()?;
                 Ok(PyCow::Owned(leaky_relu(negative_slope)))
-            } else if qualname(arg) == "torch.nn.Sequential" {
-                todo!()
+            } else if qualname(arg) == "torch.nn.modules.container.Sequential" {
+                let mut layers = Vec::new();
+                for item in arg.try_iter()? {
+                    let item = item?;
+                    let layer = to_layer(&item)?;
+                    layers.push(layer.into_bound(arg.py())?.unbind());
+                }
+                Ok(PyCow::Owned(sequential(layers)))
             } else if let Ok(list) = arg.downcast::<PyList>() {
                 // convert a list to a sequential layer
                 let mut layers = Vec::new();
                 for item in list {
-                    let layer = convert(&item)?;
+                    let layer = to_layer(&item)?;
                     layers.push(layer.into_bound(arg.py())?.unbind());
                 }
                 Ok(PyCow::Owned(sequential(layers)))
@@ -491,7 +498,7 @@ mod regioncam {
 
     /*
     /// Utility: find a plane through 3 points
-    /// returns a linear transformation that puts the farthest point 
+    /// returns a linear transformation that puts the farthest point
     #[pyfunction]
     fn plane_through_points(points: PyArray2<f32>) -> PyResult<nn::Linear> {
         if points.shape() != [3,2] {

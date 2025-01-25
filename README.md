@@ -41,7 +41,19 @@ for face in rc.faces:
 Produces:  
 <img src="example.svg" alt="drawing" width="300"/>
 
-Note: Weights and biases must be numpy arrays with dtype float32.
+Note: Weights and biases must be numpy arrays or torch tensors with dtype float32.
+
+Regioncam has limited support for torch nn layers:
+
+```python
+net = torch.nn.Sequential(
+    torch.nn.Linear(2,30),
+    torch.nn.ReLU(),
+    torch.nn.Linear(30,30),
+    torch.nn.ReLU(),
+)
+rc.add(net)
+```
 
 Algorithm
 ---------
