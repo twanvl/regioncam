@@ -4,7 +4,8 @@ use std::fmt::Debug;
 use ndarray::{array, concatenate, s, Array, Array1, Array2, Array3, ArrayView1, ArrayView2, ArrayView3, ArrayViewMut2, Axis, NewAxis};
 use approx::assert_abs_diff_eq;
 
-use crate::util::*;
+use crate::nn::NNModule;
+use crate::{util::*, Plane};
 
 // Index types
 
@@ -251,6 +252,11 @@ impl Partition {
             points[(i,1)] = radius * f32::sin(t);
         }
         Self::from_polygon(points)
+    }
+    pub fn from_plane(plane: &Plane) -> Self {
+        let mut out = Self::square(plane.size());
+        plane.mapping.apply(&mut out);
+        out
     }
 
     // Accessors

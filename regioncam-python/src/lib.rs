@@ -17,9 +17,11 @@ mod regioncam {
     use super::*;
 
     #[pyclass]
-    #[derive(Clone)]
     struct Regioncam {
         partition: Partition,
+        plane: Option<Py<PyPlane>>,
+        // points to include in visualizatoin
+        
     }
 
     #[pymethods]
@@ -29,13 +31,22 @@ mod regioncam {
         /// Parameters:
         ///  * size: Size of the rectangle to cover.
         #[new]
+        #[pyo3(signature=(size=1.0))]
         fn new(size: f32) -> Self {
-            Self{ partition: Partition::square(size) }
+            Self { partition: Partition::square(size), plane: None }
         }
         /// Create a Regioncam object with a circular region
         #[staticmethod]
         fn circle(radius: f32) -> Self {
-            Self{ partition: Partition::circle(radius) }
+            Self { partition: Partition::circle(radius), plane: None }
+        }
+        /// Create a Regioncam object for a plane through the given points.
+        #[staticmethod]
+        fn through_points<'py>(#[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>) -> PyResult<Self> {
+            let plane = Plane::through_points(&points.readonly().as_array());
+            let partition = Partition::from_plane(&plane);
+            let plane = Py::new(points.py(), PyPlane(plane))?;
+            Ok(Self { partition, plane: Some(plane) })
         }
 
         /// The number of vertices in the partition.
@@ -103,6 +114,15 @@ mod regioncam {
             self.partition.vertices_on_face(face).map(usize::from).collect()
         }
 
+        /// Mapping from 2d space
+        #[getter]
+        fn plane<'py>(&self, py: Python<'py>) -> PyResult<Py<PyPlane>> {
+            match &self.plane {
+                Some(plane) => Ok(plane.clone_ref(py)),
+                None => Err(PyAttributeError::new_err("Not constructed from a plane")),
+            }
+        }
+        
         /// Visualize the regions, and write this to an svg file.
         ///
         /// Parameters:
@@ -284,6 +304,34 @@ mod regioncam {
         }
     }
 
+    /// A plane through points in a high dimensional space
+    #[pyclass]
+    #[pyo3(frozen, name="Plane")]
+    struct PyPlane(Plane);
+    #[pymethods]
+    impl PyPlane {
+        #[new]
+        fn new<'py>(#[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>) -> Self {
+            let plane = Plane::through_points(&points.readonly().as_array());
+            PyPlane(plane)
+        }
+
+        fn forward<'py>(&self, #[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>) -> Bound<'py, PyArray2<f32>> {
+            self.0.forward(&points.readonly().as_array()).to_pyarray(points.py())
+        }
+        fn inverse<'py>(&self, #[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>) -> Bound<'py, PyArray2<f32>> {
+            self.0.inverse(&points.readonly().as_array()).to_pyarray(points.py())
+        }
+        #[getter]
+        fn weight<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
+            self.0.mapping.weight.to_pyarray(py)
+        }
+        #[getter]
+        fn bias<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f32>> {
+            self.0.mapping.bias.to_pyarray(py)
+        }
+    }
+    
     /// A layer in a neural network
     #[pyclass]
     #[pyo3(frozen)]
@@ -532,19 +580,4 @@ mod regioncam {
             Err(DowncastError::new(arg, typename).into())
         }
     }
-
-    /*
-    /// Utility: find a plane through 3 points
-    /// returns a linear transformation that puts the farthest point
-    #[pyfunction]
-    fn plane_through_points(points: PyArray2<f32>) -> PyResult<nn::Linear> {
-        if points.shape() != [3,2] {
-            return Err(PyErr::new_err("Expected shape [3,2]"))
-        }
-        bias = points.mean();
-        points -= bias;
-
-        todo!()
-    }
-*/
 }

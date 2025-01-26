@@ -1,16 +1,18 @@
+use std::f32::consts::TAU;
 use std::{io::Write, ops::Range};
-use colorgrad::Gradient;
+//use colorgrad::Gradient;
+use ndarray::Array1;
 use ndarray::ArrayView2;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
-use rand_distr::{Distribution, Uniform};
 use svg_fmt::*;
 
 use crate::partition::*;
 use crate::util::*;
 
 
+#[derive(Clone)]
 pub struct SvgOptions {
-    pub face_color_range: Range<u8>,
+    pub face_color_range: Range<f32>,
     pub face_color_by_value: f32,
     pub image_size: (f32,f32),
     pub image_border: f32,
@@ -24,7 +26,7 @@ pub struct SvgOptions {
 impl Default for SvgOptions {
     fn default() -> Self {
         Self {
-            face_color_range: 150..255,
+            face_color_range: 0.6..0.95,
             face_color_by_value: 0.6,
             image_size: (800.0, 800.0),
             image_border: 0.0,
@@ -41,95 +43,151 @@ impl SvgOptions {
     pub fn new() -> Self {
         Default::default()
     }
-
+    
     /// Output to svg
     pub fn write_svg(&self, p: &Partition, w: &mut dyn Write) -> std::io::Result<()> {
-        let mut rng = SmallRng::seed_from_u64(42);
-        writeln!(w, "{}", BeginSvg { w: self.image_size.0, h: self.image_size.1 })?;
-        // are we visualizing a classifier?
-        let last_layer_is_classification = p.activations_last().ncols() == 1;
-        // find bounding box
-        let bb = bounding_box(&p.inputs().view());
-        // transformation for coordinates
-        let vertex_coord = |vertex| {
-            let inputs = p.vertex_inputs(vertex);
-            let x = (inputs[0] - bb[0].start) / (bb[0].end - bb[0].start) * (self.image_size.0 - 2.0*self.image_border) + self.image_border;
-            let y = (inputs[1] - bb[1].start) / (bb[1].end - bb[1].start) * (self.image_size.1 - 2.0*self.image_border) + self.image_border;
-            (x,y)
-        };
-        // find value range
-        let values = p.activations_last();
+        SvgWriter::new(p, self).write_svg(w)
+    }
+}
+
+/// Helper struct for writing a Partition to an svg file
+pub struct SvgWriter<'a> {
+    pub options: &'a SvgOptions,
+    partition: &'a Partition,
+    bounding_box: Array1<Range<f32>>,
+    value_range: Range<f32>,
+    decision_boundary_layer: Option<usize>,
+    rng: SmallRng,
+}
+
+impl<'a> SvgWriter<'a> {
+    pub fn new(partition: &'a Partition, options: &'a SvgOptions) -> Self {
+        let bounding_box: ndarray::ArrayBase<ndarray::OwnedRepr<Range<f32>>, ndarray::Dim<[usize; 1]>> = bounding_box(&partition.inputs().view());
+        let values = partition.activations_last();
         let value_range = value_range(&values);
+        let last_layer_is_classification = values.ncols() == 1;
+        let decision_boundary_layer = last_layer_is_classification.then_some(partition.last_layer());
+        let rng = SmallRng::seed_from_u64(42);
+
+        SvgWriter { options, partition, bounding_box, value_range, decision_boundary_layer, rng }
+    }
+
+    /// Output to svg
+    pub fn write_svg(&mut self, w: &mut dyn Write) -> std::io::Result<()> {
+        self.write_header(w)?;
+        self.write_faces(w)?;
+        self.write_edges(w)?;
+        self.write_footer(w)?;
+        Ok(())
+    }
+    
+    pub fn write_header(&self, w: &mut dyn Write) -> std::io::Result<()> {
+        writeln!(w, "{}", BeginSvg { w: self.options.image_size.0, h: self.options.image_size.1 })
+    }
+
+    pub fn write_footer(&self, w: &mut dyn Write) -> std::io::Result<()> {
+        writeln!(w, "{}", EndSvg)
+    }
+    
+    pub fn write_faces(&mut self, w: &mut dyn Write) -> std::io::Result<()> {
         // draw faces
-        let gradient = colorgrad::preset::sinebow();
-        let face_color_by_value = if last_layer_is_classification { self.face_color_by_value } else { 0.0 };
-        for face in p.faces() {
-            let path = self.face_to_path(p, face, vertex_coord);
-            let color = 
-                if face_color_by_value > 0.0 {
-                    let face_centroid = p.face_centroid(face);
-                    let face_value = p.face_activation_for(p.last_layer(), face, face_centroid.view())[0];
-                    //let face_value = mean(p.vertices_on_face(face).map(|v| values[(v.into(), 0)]));
-                    let t = (face_value - value_range.start) / (value_range.end - value_range.start);
-                    let [r,g,b,_] = gradient.at(t).to_array();
-                    let add_noise = |x: f32, rng: &mut SmallRng| -> u8 {
-                        let x = x * face_color_by_value + rng.gen_range(0.0..1.0-face_color_by_value);
-                        self.face_color_range.start + (x * (self.face_color_range.end - self.face_color_range.start) as f32) as u8
-                    };
-                    Color { r: add_noise(r, &mut rng), g: add_noise(g, &mut rng), b: add_noise(b, &mut rng) }
-                } else {
-                    self.random_color(&mut rng)
-                };
+        for face in self.partition.faces() {
+            let path = self.face_to_path(face);
+            let color = self.face_color(face);
             writeln!(w, "{}", path.fill(color))?;
         }
-        // draw edges
-        for edge in p.edges() {
-            if self.draw_boundary || !p.is_boundary(edge) {
-                let (a,b) = p.endpoints(edge);
-                let a = vertex_coord(a);
-                let b = vertex_coord(b);
-                let label = p.edge_label(edge);
-                let is_last = last_layer_is_classification && label.layer == p.last_layer();
-                if is_last {
-                    writeln!(w, "{}", line_segment(a.0, a.1, b.0, b.1).width(self.line_width_decision_boundary).color(self.line_color_decision_boundary))?;
-                } else {
-                    writeln!(w, "{}", line_segment(a.0, a.1, b.0, b.1).width(self.line_width).color(self.line_color))?;
-                }
-            }
-        }
-        writeln!(w, "{}", EndSvg)?;
         Ok(())
     }
 
-    fn random_color<R: Rng + ?Sized>(&self, rng: &mut R) -> Color {
-        let dist = Uniform::new(self.face_color_range.start, self.face_color_range.end);
-        Color {
-            r: dist.sample(rng),
-            g: dist.sample(rng),
-            b: dist.sample(rng),
+    pub fn write_edges(&self, w: &mut dyn Write) -> std::io::Result<()> {
+        // draw edges
+        for edge in self.partition.edges() {
+            let label = self.partition.edge_label(edge);
+            if self.options.draw_boundary || !(self.partition.is_boundary(edge) || label.layer == 0) {
+                let is_decision_boundary = Some(label.layer) == self.decision_boundary_layer;
+                let path = self.edge_to_path(edge)
+                    .width(if is_decision_boundary { self.options.line_width_decision_boundary } else { self.options.line_width })
+                    .color(if is_decision_boundary { self.options.line_color_decision_boundary } else { self.options.line_color });
+                 writeln!(w, "{path}")?;
+            }
+        }
+        Ok(())
+    }
+
+    fn vertex_coord(&self, vertex: Vertex) -> (f32, f32) {
+        let inputs = self.partition.vertex_inputs(vertex);
+        (
+            coord_to_bounding_range(inputs[0], &self.bounding_box[0], self.options.image_size.0, self.options.image_border),
+            coord_to_bounding_range(inputs[1], &self.bounding_box[1], self.options.image_size.1, self.options.image_border)
+        )
+    }
+
+    fn face_color(&mut self, face: Face) -> Color {
+        if self.decision_boundary_layer.is_some() && self.options.face_color_by_value > 0.0 {
+            // base face color on value of face
+            let face_centroid = self.partition.face_centroid(face);
+            let face_value = self.partition.face_activation_for(self.partition.last_layer(), face, face_centroid.view())[0];
+            // map to value range
+            let t = where_in_range(face_value, &self.value_range);
+            //
+            //let gradient = colorgrad::preset::sinebow();
+            //let [r, g, b, _] = gradient.at(t * 0.9).to_array();
+            // Alternative color map:
+            let periodic = |t| f32::cos(t * TAU) * 0.5 + 1.0;
+            let [r,g,b] = [periodic(t), periodic(t * 2.5 + 0.33), periodic(t * 5.2 + 0.66)];
+            self.random_color([r, g, b], self.options.face_color_by_value)
+        } else {
+            self.random_color([0.0, 0.0, 0.0], 0.0)
         }
     }
 
-    fn face_to_path(&self, p: &Partition, face: Face, vertex_coord: impl Fn(Vertex) -> (f32,f32)) -> Path {
-        let mut iter = p.halfedges_on_face(face);
-        let start_he = iter.next().unwrap();
-        let start = vertex_coord(p.start(start_he));
+    fn random_color_component(&mut self, base: f32, base_fraction: f32) -> u8 {
+        let x = base * base_fraction + self.rng.gen_range(0.0..1.0-base_fraction);
+        let x = point_in_range(x, &self.options.face_color_range) * 255.0;
+        x as u8
+    }
+    fn random_color(&mut self, [r, g, b]: [f32;3], base_fraction: f32) -> Color {
+        Color {
+            r: self.random_color_component(r, base_fraction),
+            g: self.random_color_component(g, base_fraction),
+            b: self.random_color_component(b, base_fraction),
+        }
+    }
+
+    fn face_to_path(&self, face: Face) -> Path {
+        let mut iter = self.partition.vertices_on_face(face);
+        let start_vertex = iter.next().unwrap();
+        let start = self.vertex_coord(start_vertex);
         let path = path().move_to(start.0, start.1);
-        let path = iter.fold(path, |path, he| {
-            let point = vertex_coord(p.start(he));
+        let path = iter.fold(path, |path, vertex| {
+            let point = self.vertex_coord(vertex);
             path.line_to(point.0, point.1)
         });
         path.close()
     }
+
+    fn edge_to_path(&self, edge: Edge) -> LineSegment {
+        let (a,b) = self.partition.endpoints(edge);
+        let a = self.vertex_coord(a);
+        let b = self.vertex_coord(b);
+        line_segment(a.0, a.1, b.0, b.1)
+    }
+}
+
+fn point_in_range(x: f32, range: &Range<f32>) -> f32 {
+    range.start + x * (range.end - range.start)
+}
+fn where_in_range(x: f32, range: &Range<f32>) -> f32 {
+    if range.start == range.end {
+        0.0
+    } else {
+        (x - range.start) / (range.end - range.start)
+    }
+}
+fn coord_to_bounding_range(x: f32, range: &Range<f32>, size: f32, border: f32) -> f32 {
+    where_in_range(x, range) * (size - border) + border
 }
 
 fn value_range(data: &ArrayView2<f32>) -> Range<f32> {
-    let mut range = data.iter().copied().fold(EMPTY_RANGE, minmax);
-    range.end += 1.0;
-    range
-}
-
-fn mean(iter: impl Iterator<Item=f32>) -> f32 {
-    let (count, sum) = iter.fold((0.0, 0.0), |(count, sum), x| (count + 1.0, sum + x));
-    sum / count
+    data.iter().copied().fold(EMPTY_RANGE, minmax)
 }
