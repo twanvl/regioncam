@@ -1,8 +1,9 @@
 // Utility functions
 
 use std::cmp::Ordering;
+use std::ops::Range;
 
-use ndarray::{s, Array, Array1, ArrayView, ArrayView1, Axis, Dimension, Ix1, Ix2, Ix3, RemoveAxis, Slice, SliceArg, SliceInfo, SliceInfoElem};
+use ndarray::{s, Array, Array1, ArrayBase, ArrayView, ArrayView1, ArrayView2, Axis, Data, Dimension, Ix1, Ix2, Ix3, RemoveAxis, Slice, SliceArg, SliceInfo, SliceInfoElem};
 use num_traits::Zero;
 
 pub fn relu<D: Dimension>(arr: &ArrayView<f32, D>) -> Array<f32, D> {
@@ -24,6 +25,29 @@ pub(crate) fn histogram(values: &[usize], len: usize) -> Vec<usize> {
         counts[*value] += 1;
     }
     counts
+}
+
+pub(crate) const EMPTY_RANGE: Range<f32> = f32::INFINITY..f32::NEG_INFINITY;
+
+#[inline]
+pub(crate) fn minmax(mut range: Range<f32>, x: f32) -> Range<f32> {
+    range.start = f32::min(range.start, x);
+    range.end   = f32::max(range.end, x);
+    range
+}
+
+pub fn bounding_box(arr: &ArrayView2<f32>) -> Array1<Range<f32>> {
+    arr.fold_axis(Axis(0), EMPTY_RANGE, |r,x| minmax(r.clone(), *x))
+}
+
+// norm of a vector
+pub fn norm<D: Dimension, S: Data<Elem=f32>>(arr: &ArrayBase<S, D>) -> f32 {
+    arr.fold(0., |sum, x| sum + x * x).sqrt()
+}
+
+pub fn into_normalized<D: Dimension>(arr: Array<f32, D>) -> Array<f32, D> {
+    let norm = norm(&arr);
+    arr.mapv_into(|x| x / norm)
 }
 
 /// For each row, select the given element in axis

@@ -6,6 +6,7 @@ use rand_distr::{Distribution, Uniform};
 use svg_fmt::*;
 
 use crate::partition::*;
+use crate::util::*;
 
 
 pub struct SvgOptions {
@@ -48,12 +49,12 @@ impl SvgOptions {
         // are we visualizing a classifier?
         let last_layer_is_classification = p.activations_last().ncols() == 1;
         // find bounding box
-        let bb = bounding_box(p);
+        let bb = bounding_box(&p.inputs().view());
         // transformation for coordinates
         let vertex_coord = |vertex| {
             let inputs = p.vertex_inputs(vertex);
-            let x = (inputs[0] - bb.0.start) / (bb.0.end - bb.0.start) * (self.image_size.0 - 2.0*self.image_border) + self.image_border;
-            let y = (inputs[1] - bb.1.start) / (bb.1.end - bb.1.start) * (self.image_size.1 - 2.0*self.image_border) + self.image_border;
+            let x = (inputs[0] - bb[0].start) / (bb[0].end - bb[0].start) * (self.image_size.0 - 2.0*self.image_border) + self.image_border;
+            let y = (inputs[1] - bb[1].start) / (bb[1].end - bb[1].start) * (self.image_size.1 - 2.0*self.image_border) + self.image_border;
             (x,y)
         };
         // find value range
@@ -120,26 +121,6 @@ impl SvgOptions {
         });
         path.close()
     }
-}
-
-const EMPTY_RANGE: Range<f32> = f32::INFINITY..f32::NEG_INFINITY;
-
-#[inline]
-fn minmax(mut range: Range<f32>, x: f32) -> Range<f32> {
-    range.start = f32::min(range.start, x);
-    range.end   = f32::max(range.end, x);
-    range
-}
-
-fn bounding_box(p: &Partition) -> (Range<f32>, Range<f32>) {
-    let mut bounds = vec![EMPTY_RANGE;2];
-    for vertex in p.vertices() {
-        let pos = p.vertex_inputs(vertex);
-        for i in 0..2 {
-            bounds[i] = minmax(bounds[i].clone(), pos[i]);
-        }
-    }
-    (bounds[0].clone(), bounds[1].clone())
 }
 
 fn value_range(data: &ArrayView2<f32>) -> Range<f32> {

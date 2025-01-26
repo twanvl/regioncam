@@ -15,6 +15,7 @@ pub trait NNModule {
 }
 
 /// A linear layer in a neural network
+#[derive(Clone, Debug)]
 pub struct Linear {
     pub weight: Array2<f32>,
     pub bias: Array1<f32>,
@@ -53,7 +54,7 @@ impl NNModule for Linear {
     }
 
     fn forward(&self, x: &ArrayView2<f32>) -> Array2<f32> {
-        x * &self.weight + &self.bias
+        x.dot(&self.weight) + &self.bias
     }
 }
 
