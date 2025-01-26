@@ -6,9 +6,9 @@ use std::fs::File;
 use std::fmt::Write;
 
 use ndarray::{Dim, Dimension};
-use pyo3::exceptions::PyAttributeError;
-use pyo3::PyClass;
-use pyo3::{intern, types::PyString, DowncastError};
+use pyo3::exceptions::{PyAttributeError, PyValueError};
+use pyo3::types::{PyDict, PyString, PyTuple};
+use pyo3::{intern, PyClass, DowncastError};
 
 use ::regioncam::*;
 
@@ -129,12 +129,10 @@ mod regioncam {
         ///  * path:        path of the file to write to
         ///  * size:        width and height of the image in pixels
         ///  * line_width:  line width to use for edges
-        #[pyo3(signature=(path, *, size=None, line_width=None))]
-        fn write_svg(&self, path: &str, size: Option<f32>, line_width: Option<f32>) -> PyResult<()> {
+        #[pyo3(signature=(path, **kwargs))]
+        fn write_svg(&self, path: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+            let svg = parse_svg_options(kwargs)?;
             let mut file = File::create(path)?;
-            let mut svg = SvgOptions::new();
-            if let Some(size) = size { svg.image_size = (size,size); }
-            if let Some(line_width) = line_width { svg.line_width = line_width; }
             svg.write_svg(&self.partition, &mut file)?;
             Ok(())
         }
@@ -144,12 +142,10 @@ mod regioncam {
         /// Parameters:
         ///  * size:        width and height of the image in pixels
         ///  * line_width:  line width to use for edges
-        #[pyo3(signature=(*, size=None, line_width=None))]
-        fn _repr_svg_(&self, size: Option<f32>, line_width: Option<f32>) -> PyResult<String> {
+        #[pyo3(signature=(**kwargs))]
+        fn _repr_svg_(&self, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<String> {
+            let svg = parse_svg_options(kwargs)?;
             let mut out = vec![];
-            let mut svg = SvgOptions::new();
-            if let Some(size) = size { svg.image_size = (size,size); }
-            if let Some(line_width) = line_width { svg.line_width = line_width; }
             svg.write_svg(&self.partition, &mut out)?;
             Ok(String::from_utf8(out)?)
         }
@@ -579,5 +575,33 @@ mod regioncam {
             };
             Err(DowncastError::new(arg, typename).into())
         }
+    }
+    
+    fn parse_svg_options<'py>(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<SvgOptions> {
+        let mut opts = SvgOptions::new();
+        if let Some(kwargs) = kwargs {
+            for (k, v) in kwargs {
+                let k = k.downcast::<PyString>()?.to_str()?;
+                if k == "line_width" {
+                    opts.line_width = v.extract()?;
+                } else if k == "draw_boundary" {
+                    opts.draw_boundary = v.extract()?;
+                } else if k == "line_width_decision_boundary" || k == "decision_boundary_line_width" {
+                    opts.line_width_decision_boundary = v.extract()?;
+                } else if k == "image_size" || k == "size" {
+                    if let Ok(v) = v.downcast::<PyTuple>() {
+                        opts.image_size = v.extract()?;
+                    } else {
+                        let size = v.extract()?;
+                        opts.image_size = (size, size);
+                    }
+                } else if k == "image_border" || k == "border" {
+                    opts.image_border = v.extract()?;
+                } else {
+                    return Err(PyValueError::new_err(format!("Unexpected argument: '{k}'")));
+                }
+            }
+        }
+        Ok(opts)
     }
 }
