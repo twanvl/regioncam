@@ -20,6 +20,8 @@ mod regioncam {
     struct Regioncam {
         partition: Partition,
         plane: Option<Py<PyPlane>>,
+        // options to use for svg visualization
+        svg_options: SvgOptions,
         // points to include in visualizatoin
         marked_points: Vec<MarkedPoint>,
     }
@@ -33,12 +35,12 @@ mod regioncam {
         #[new]
         #[pyo3(signature=(size=1.0))]
         fn new(size: f32) -> Self {
-            Self { partition: Partition::square(size), plane: None, marked_points: vec![] }
+            Self { partition: Partition::square(size), plane: None, svg_options: SvgOptions::default(), marked_points: vec![] }
         }
         /// Create a Regioncam object with a circular region
         #[staticmethod]
         fn circle(radius: f32) -> Self {
-            Self { partition: Partition::circle(radius), plane: None, marked_points: vec![] }
+            Self { partition: Partition::circle(radius), plane: None, svg_options: SvgOptions::default(), marked_points: vec![] }
         }
         /// Create a Regioncam object for a plane through the given points.
         #[staticmethod]
@@ -54,7 +56,7 @@ mod regioncam {
                     }
                 ).collect();
             let plane = Py::new(points.py(), PyPlane(plane))?;
-            Ok(Self { partition, plane: Some(plane), marked_points })
+            Ok(Self { partition, plane: Some(plane), svg_options: SvgOptions::default(), marked_points })
         }
 
         /// Mark points in the input space.
@@ -169,7 +171,7 @@ mod regioncam {
         ///  * line_width:  line width to use for edges
         #[pyo3(signature=(path, **kwargs))]
         fn write_svg(&self, path: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
-            let svg_opts = parse_svg_options(kwargs)?;
+            let svg_opts = parse_svg_options(&self.svg_options, kwargs)?;
             let mut file = File::create(path)?;
             self.do_write_svg(svg_opts, &mut file)?;
             Ok(())
@@ -182,10 +184,17 @@ mod regioncam {
         ///  * line_width:  line width to use for edges
         #[pyo3(signature=(**kwargs))]
         fn _repr_svg_(&self, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<String> {
-            let svg_opts = parse_svg_options(kwargs)?;
+            let svg_opts = parse_svg_options(&self.svg_options, kwargs)?;
             let mut out = vec![];
             self.do_write_svg(svg_opts, &mut out)?;
             Ok(String::from_utf8(out)?)
+        }
+
+        /// Set svg format options
+        #[pyo3(signature=(**kwargs))]
+        fn set_format(&mut self, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+            self.svg_options = parse_svg_options(&self.svg_options, kwargs)?;
+            Ok(())
         }
 
         // layers
@@ -621,8 +630,8 @@ mod regioncam {
         }
     }
     
-    fn parse_svg_options<'py>(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<SvgOptions> {
-        let mut opts = SvgOptions::new();
+    fn parse_svg_options<'py>(opts: &SvgOptions, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<SvgOptions> {
+        let mut opts = opts.clone();
         if let Some(kwargs) = kwargs {
             for (k, v) in kwargs {
                 let k = k.downcast::<PyString>()?.to_str()?;

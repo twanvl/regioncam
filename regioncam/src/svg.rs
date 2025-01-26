@@ -38,7 +38,7 @@ impl Default for SvgOptions {
             line_color: black(),
             line_color_decision_boundary: red(),
             point_size: 8.0,
-            label_size: 12.0,
+            label_size: 16.0,
         }
     }
 }
