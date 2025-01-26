@@ -21,7 +21,7 @@ mod regioncam {
         partition: Partition,
         plane: Option<Py<PyPlane>>,
         // points to include in visualizatoin
-        
+        marked_points: Vec<MarkedPoint>,
     }
 
     #[pymethods]
@@ -33,20 +33,58 @@ mod regioncam {
         #[new]
         #[pyo3(signature=(size=1.0))]
         fn new(size: f32) -> Self {
-            Self { partition: Partition::square(size), plane: None }
+            Self { partition: Partition::square(size), plane: None, marked_points: vec![] }
         }
         /// Create a Regioncam object with a circular region
         #[staticmethod]
         fn circle(radius: f32) -> Self {
-            Self { partition: Partition::circle(radius), plane: None }
+            Self { partition: Partition::circle(radius), plane: None, marked_points: vec![] }
         }
         /// Create a Regioncam object for a plane through the given points.
         #[staticmethod]
-        fn through_points<'py>(#[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>) -> PyResult<Self> {
+        #[pyo3(signature=(points, labels=vec![]))]
+        fn through_points<'py>(#[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>, mut labels: Vec<String>) -> PyResult<Self> {
             let plane = Plane::through_points(&points.readonly().as_array());
             let partition = Partition::from_plane(&plane);
+            labels.resize(plane.points.nrows(), String::new());
+            let marked_points = plane.points.rows().into_iter().zip(labels.into_iter()).map(
+                    |(point,label)| {
+                        let position = point.as_slice().unwrap().try_into().unwrap();
+                        MarkedPoint { position, label }
+                    }
+                ).collect();
             let plane = Py::new(points.py(), PyPlane(plane))?;
-            Ok(Self { partition, plane: Some(plane) })
+            Ok(Self { partition, plane: Some(plane), marked_points })
+        }
+
+        /// Mark points in the input space.
+        /// 
+        /// If this Regioncam was constructed with a plane through points,
+        ///  then these points are projected onto that plane.
+        #[pyo3(signature=(points, labels=vec![], project_to_plane=true))]
+        fn mark_points<'py>(&mut self, #[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>, mut labels: Vec<String>, project_to_plane: bool) -> PyResult<()> {
+            let py = points.py();
+            let points = points.readonly();
+            let points = points.as_array();
+            labels.resize(points.nrows(), String::new());
+            let projected_points =
+                if let Some(plane) = &self.plane {
+                    if project_to_plane {
+                        Some(plane.borrow(py).0.inverse(&points.view()))
+                    } else { None }
+                } else { None };
+            let points = projected_points.as_ref().map_or(points, |x| x.view());
+            self.marked_points.extend(points.rows().into_iter().zip(labels.into_iter()).map(
+                    |(point,label)| {
+                        let position = point.as_slice().unwrap().try_into().unwrap();
+                        MarkedPoint { position, label }
+                    }
+                ));
+            Ok(())
+        }
+        
+        fn remove_markers(&mut self) {
+            self.marked_points.clear();
         }
 
         /// The number of vertices in the partition.
@@ -131,9 +169,9 @@ mod regioncam {
         ///  * line_width:  line width to use for edges
         #[pyo3(signature=(path, **kwargs))]
         fn write_svg(&self, path: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
-            let svg = parse_svg_options(kwargs)?;
+            let svg_opts = parse_svg_options(kwargs)?;
             let mut file = File::create(path)?;
-            svg.write_svg(&self.partition, &mut file)?;
+            self.do_write_svg(svg_opts, &mut file)?;
             Ok(())
         }
 
@@ -144,9 +182,9 @@ mod regioncam {
         ///  * line_width:  line width to use for edges
         #[pyo3(signature=(**kwargs))]
         fn _repr_svg_(&self, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<String> {
-            let svg = parse_svg_options(kwargs)?;
+            let svg_opts = parse_svg_options(kwargs)?;
             let mut out = vec![];
-            svg.write_svg(&self.partition, &mut out)?;
+            self.do_write_svg(svg_opts, &mut out)?;
             Ok(String::from_utf8(out)?)
         }
 
@@ -251,6 +289,12 @@ mod regioncam {
     }
 
     impl Regioncam {
+        fn do_write_svg(&self, svg_opts: SvgOptions, mut w: &mut dyn std::io::Write) -> std::io::Result<()> {
+            let mut writer = SvgWriter::new(&self.partition, &svg_opts);
+            writer.points = &self.marked_points;
+            writer.write_svg(&mut w)
+        }
+
         fn add_layer<'py>(&mut self, py: Python<'py>, layer: &Layer, input_layer: Option<usize>) -> PyResult<usize> {
             let input_layer = input_layer.unwrap_or(self.partition.last_layer());
             match layer {
@@ -595,6 +639,10 @@ mod regioncam {
                         let size = v.extract()?;
                         opts.image_size = (size, size);
                     }
+                } else if k == "point_size" || k == "marker_size" {
+                    opts.point_size = v.extract()?;
+                } else if k == "label_size" || k == "text_size" {
+                    opts.label_size = v.extract()?;
                 } else {
                     return Err(PyValueError::new_err(format!("Unexpected argument: '{k}'")));
                 }

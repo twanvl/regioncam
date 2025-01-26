@@ -254,7 +254,7 @@ impl Partition {
         Self::from_polygon(points)
     }
     pub fn from_plane(plane: &Plane) -> Self {
-        let mut out = Self::square(plane.size());
+        let mut out = Self::square(plane.size() * 1.5);
         plane.mapping.apply(&mut out);
         out
     }

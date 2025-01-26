@@ -1,7 +1,9 @@
 use std::f32::consts::TAU;
-use std::{io::Write, ops::Range};
+use std::io::Write;
+use std::ops::Range;
 //use colorgrad::Gradient;
 use ndarray::Array1;
+use ndarray::ArrayView1;
 use ndarray::ArrayView2;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use svg_fmt::*;
@@ -20,6 +22,8 @@ pub struct SvgOptions {
     pub line_width_decision_boundary: f32,
     pub line_color: Color,
     pub line_color_decision_boundary: Color,
+    pub point_size: f32,
+    pub label_size: f32,
 }
 
 impl Default for SvgOptions {
@@ -33,6 +37,8 @@ impl Default for SvgOptions {
             line_width_decision_boundary: 1.6,
             line_color: black(),
             line_color_decision_boundary: red(),
+            point_size: 8.0,
+            label_size: 12.0,
         }
     }
 }
@@ -48,6 +54,11 @@ impl SvgOptions {
     }
 }
 
+pub struct MarkedPoint {
+    pub position: [f32;2],
+    pub label: String,
+}
+
 /// Helper struct for writing a Partition to an svg file
 pub struct SvgWriter<'a> {
     options: &'a SvgOptions,
@@ -55,6 +66,7 @@ pub struct SvgWriter<'a> {
     bounding_box: Array1<Range<f32>>,
     value_range: Range<f32>,
     decision_boundary_layer: Option<usize>,
+    pub points: &'a [MarkedPoint],
     rng: SmallRng,
 }
 
@@ -67,7 +79,7 @@ impl<'a> SvgWriter<'a> {
         let decision_boundary_layer = last_layer_is_classification.then_some(partition.last_layer());
         let rng = SmallRng::seed_from_u64(42);
 
-        SvgWriter { options, partition, bounding_box, value_range, decision_boundary_layer, rng }
+        SvgWriter { options, partition, bounding_box, value_range, decision_boundary_layer, points: &[], rng }
     }
 
     /// Output to svg
@@ -75,6 +87,7 @@ impl<'a> SvgWriter<'a> {
         self.write_header(w)?;
         self.write_faces(w)?;
         self.write_edges(w)?;
+        self.write_points(w)?;
         self.write_footer(w)?;
         Ok(())
     }
@@ -118,9 +131,26 @@ impl<'a> SvgWriter<'a> {
         }
         Ok(())
     }
+    
+    pub fn write_points(&self, w: &mut dyn Write) -> std::io::Result<()> {
+        for point in self.points {
+            let (x, y) = self.point_coord(point.position.as_ref().into());
+            let radius = self.options.point_size * 0.5;
+            let circle = Circle { x, y, radius, style: Style::default(), comment: None };
+            let circle = circle.fill(black());
+            writeln!(w, "{}", circle)?;
+            if !point.label.is_empty() {
+                writeln!(w, "{}", text(x + radius, y - radius, &point.label).size(self.options.label_size))?;
+            }
+        }
+        Ok(())
+    }
 
     fn vertex_coord(&self, vertex: Vertex) -> (f32, f32) {
         let inputs = self.partition.vertex_inputs(vertex);
+        self.point_coord(inputs)
+    }
+    fn point_coord(&self, inputs: ArrayView1<f32>) -> (f32, f32) {
         (
             where_in_range(inputs[0], &self.bounding_box[0]) * self.options.image_size.0,
             where_in_range(inputs[1], &self.bounding_box[1]) * self.options.image_size.1
