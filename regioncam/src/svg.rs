@@ -15,7 +15,6 @@ pub struct SvgOptions {
     pub face_color_range: Range<f32>,
     pub face_color_by_value: f32,
     pub image_size: (f32,f32),
-    pub image_border: f32,
     pub draw_boundary: bool,
     pub line_width: f32,
     pub line_width_decision_boundary: f32,
@@ -29,10 +28,9 @@ impl Default for SvgOptions {
             face_color_range: 0.6..0.95,
             face_color_by_value: 0.6,
             image_size: (800.0, 800.0),
-            image_border: 0.0,
             draw_boundary: false,
-            line_width: 0.5,
-            line_width_decision_boundary: 1.5,
+            line_width: 0.8,
+            line_width_decision_boundary: 1.6,
             line_color: black(),
             line_color_decision_boundary: red(),
         }
@@ -52,7 +50,7 @@ impl SvgOptions {
 
 /// Helper struct for writing a Partition to an svg file
 pub struct SvgWriter<'a> {
-    pub options: &'a SvgOptions,
+    options: &'a SvgOptions,
     partition: &'a Partition,
     bounding_box: Array1<Range<f32>>,
     value_range: Range<f32>,
@@ -82,7 +80,14 @@ impl<'a> SvgWriter<'a> {
     }
     
     pub fn write_header(&self, w: &mut dyn Write) -> std::io::Result<()> {
-        writeln!(w, "{}", BeginSvg { w: self.options.image_size.0, h: self.options.image_size.1 })
+        // Note: svg_fmt::BeginSvg doesn't support width and height attributes
+        let size = self.options.image_size;
+        let padding = if self.options.draw_boundary { self.options.line_width * 0.5 } else { 0.0 };
+        writeln!(w, r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{} {} {} {}" width="{}" height="{}">"#,
+             -padding, -padding,
+             size.0 + 2.0 * padding, size.1 + 2.0 * padding,
+             size.0 + 2.0 * padding, size.1 + 2.0 * padding
+        )
     }
 
     pub fn write_footer(&self, w: &mut dyn Write) -> std::io::Result<()> {
@@ -117,8 +122,8 @@ impl<'a> SvgWriter<'a> {
     fn vertex_coord(&self, vertex: Vertex) -> (f32, f32) {
         let inputs = self.partition.vertex_inputs(vertex);
         (
-            coord_to_bounding_range(inputs[0], &self.bounding_box[0], self.options.image_size.0, self.options.image_border),
-            coord_to_bounding_range(inputs[1], &self.bounding_box[1], self.options.image_size.1, self.options.image_border)
+            where_in_range(inputs[0], &self.bounding_box[0]) * self.options.image_size.0,
+            where_in_range(inputs[1], &self.bounding_box[1]) * self.options.image_size.1
         )
     }
 
@@ -183,9 +188,6 @@ fn where_in_range(x: f32, range: &Range<f32>) -> f32 {
     } else {
         (x - range.start) / (range.end - range.start)
     }
-}
-fn coord_to_bounding_range(x: f32, range: &Range<f32>, size: f32, border: f32) -> f32 {
-    where_in_range(x, range) * (size - border) + border
 }
 
 fn value_range(data: &ArrayView2<f32>) -> Range<f32> {

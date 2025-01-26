@@ -595,8 +595,6 @@ mod regioncam {
                         let size = v.extract()?;
                         opts.image_size = (size, size);
                     }
-                } else if k == "image_border" || k == "border" {
-                    opts.image_border = v.extract()?;
                 } else {
                     return Err(PyValueError::new_err(format!("Unexpected argument: '{k}'")));
                 }
