@@ -4,3 +4,4 @@ requires = ["maturin>=1.0,<2.0"]
 
 [project]
 name = "regioncam"
+dynamic = ["version"]
