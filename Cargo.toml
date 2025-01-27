@@ -5,7 +5,8 @@ members = [
     "regioncam-python"
 ]
 
-[profile.release]
+[profile.release-with-debug]
+inherits = "release"
 debug = true
 
 #[[bench]]
