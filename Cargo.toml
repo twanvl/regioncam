@@ -6,7 +6,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Twan van Laarhoven <twanvl@gmail.com>"]
 description = "Visualize linear regions in neural networks"
 
