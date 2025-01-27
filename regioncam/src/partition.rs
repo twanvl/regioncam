@@ -952,7 +952,7 @@ impl Partition {
     fn argmax_face_mask(&self, layer: usize, max: &[f32]) -> Array2<bool> {
         let acts = self.activations(layer);
         let mut mask = Array2::from_elem((self.num_faces(), acts.ncols()), true);
-        let eps = 1e-6;
+        let eps = 1e-5; // TODO: we shouldn't need epsilon here, we could instead look for diviation from maximum
         for he in self.halfedges() {
             if let Some(face) = self.face(he) {
                 let max = max[self.start(he).0];
@@ -1263,6 +1263,10 @@ mod test {
         for steps in [0,2,4,8,16,32,64,128] {
             out.push(random_partition(steps, edge_splits, face_splits, &mut rng));
         }
+        if edge_splits && face_splits {
+            out.push(test_case_triangles(2));
+            out.push(test_case_triangles(5));
+        }
         out
     }
 
@@ -1330,10 +1334,7 @@ mod test {
         assert_eq!(p.num_halfedges(), p2.num_halfedges());
     }
 
-    #[test]
-    fn triangles() {
-        // make weights and biases
-        let n = 5;
+    fn test_case_triangles(n: usize) -> Partition {
         let dirs = array![[1.0,0.0], [0.0,1.0], [1.0,1.0], [0.5,-0.5]];
         let m = dirs.nrows();
         let pos = Array1::linspace(-1.8, 1.8, n);
@@ -1345,11 +1346,15 @@ mod test {
         let bias =
             stack(Axis(0), &vec![pos.view(); m]).unwrap()
             .into_shape_with_order(m * n).unwrap();
-        println!("weight: {weight}");
-        println!("bias: {bias}");
-        // partition
         let mut p = Partition::square(2.0);
         p.linear(&weight.view(), &bias.view());
+        p
+    }
+
+    #[test]
+    fn triangles() {
+        // partition
+        let mut p = test_case_triangles(5);
         p.check_invariants();
         p.relu();
         p.check_invariants();
@@ -1438,6 +1443,39 @@ mod test {
             let mut file = File::create("argmax_pool.svg").expect("Can't create file");
             SvgOptions::new().write_svg(&p, &mut file).unwrap();
         }
+    }
+
+    #[test]
+    fn max_pool_triangles() {
+        let mut p = test_case_triangles(5);
+        p.check_invariants();
+        p.max_pool();
+        p.check_invariants();
+        println!("{} faces", p.num_faces());
+    }
+
+    // Test case that gave "Face has inconsistent argmax" error
+    #[test]
+    fn error_case_1() {
+        let mut p = Partition::square(2.0);
+        p.linear(&array![
+                [-0.43146494, -1.0630932 , -0.75895   , -1.212125  ,  0.52904165],
+                [-1.1837014 ,  0.8460558 , -2.002247  ,  0.7702433 ,  1.5294473 ]].view(),
+            &array![ 1.4554669 , -0.1446282 ,  0.63949215,  0.01911678, -0.13796857].view()
+        );
+        p.relu();
+        p.linear(&array![
+                [-0.31510666,  1.6690438 , -1.9769672 ],
+                [ 1.4305679 , -1.4525309 , -1.6842408 ],
+                [-1.501365  ,  1.7357037 , -1.4884815 ],
+                [ 1.9054497 , -1.1933256 , -1.7565324 ],
+                [ 0.37124428, -1.8019046 ,  1.9643012 ]].view(),
+                &array![ 0.6519267, -0.5254144, -1.1940845].view()
+        );
+        println!("{} faces", p.num_faces());
+        //println!("{p:?}");
+        p.decision_boundary();
+        //let (_max, face_argmax) = p.split_by_argmax_at(p.last_layer());
     }
 }
 
