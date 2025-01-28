@@ -513,6 +513,13 @@ mod regioncam {
             Layer::Sequential { layers }
         }
 
+        /// An identity layer
+        #[pyfunction]
+        #[pyo3(name="Identity")]
+        fn identity() -> Layer {
+            Layer::Sequential { layers: vec![] }
+        }
+
         /// Convert a torch layer into a Regioncam layer
         #[pyfunction]
         fn convert<'py>(arg: &Bound<'py, PyAny>) -> PyResult<Bound<'py, Layer>> {
@@ -535,6 +542,14 @@ mod regioncam {
             } else if qualname(arg) == "torch.nn.modules.activation.LeakyReLU" {
                 let negative_slope = arg.getattr(intern!(arg.py(), "negative_slope"))?.extract()?;
                 Ok(PyCow::Owned(leaky_relu(negative_slope)))
+            } else if qualname(arg) == "torch.nn.modules.linear.Identity" {
+                Ok(PyCow::Owned(identity()))
+            } else if qualname(arg) == "torch.nn.modules.dropout.Dropout" ||
+                      qualname(arg) == "torch.nn.modules.dropout.Dropout1d" ||
+                      qualname(arg) == "torch.nn.modules.dropout.Dropout2d" {
+                // Torch dropout behaves like a linear layer when not training,
+                // So replace dropout layers with identity layers.
+                Ok(PyCow::Owned(identity()))
             } else if qualname(arg) == "torch.nn.modules.container.Sequential" {
                 let mut layers = Vec::new();
                 for item in arg.try_iter()? {
