@@ -167,6 +167,7 @@ pub struct Partition {
 
     face_data:  Vec<Array3<f32>>,  // layer -> face -> f32[D_in, D_F]
     face_he:    Vec<Halfedge>,     // face -> halfedge
+    continuous: Vec<bool>,         // layer -> is the function continuous?
     // /// For each (ReLU) layer, for each face: a mask indicating which dimensions are non-negative
     //face_mask:  Vec<LayerMask>,    // layer -> mask used to construct face data
 
@@ -226,6 +227,7 @@ impl Partition {
             he_next:   Vec::from_iter((0..n).flat_map(|i| [Halfedge(2*((i+1)%n)), Halfedge(2*((i+n-1)%n)+1)])),
             he_prev:   Vec::from_iter((0..n).flat_map(|i| [Halfedge(2*((i+n-1)%n)), Halfedge(2*((i+1)%n)+1)])),
             edge_label: vec![EdgeLabel::default(); n],
+            continuous: vec![true],
         }
     }
     /// Construct a partition with a single rectangle
@@ -388,6 +390,7 @@ impl Partition {
             assert_eq!(face_data.len_of(Axis(1)), 3);
             assert_eq!(face_data.len_of(Axis(2)), vertex_data.len_of(Axis(1)));
         }
+        assert_eq!(self.continuous.len(), self.num_layers());
         assert_eq!(self.face_he.len(), self.num_faces());
         assert_eq!(self.he_vertex.len(), self.num_halfedges());
         assert_eq!(self.he_face.len(), self.num_halfedges());
@@ -438,25 +441,28 @@ impl Partition {
 
     fn check_face_outputs(&self) {
         // check that the face outputs are correct
+        // this is only true for continuous layers, otherwise there are dicontinuities at edges and vertices
         for face in self.faces() {
             let indices = Vec::from_iter(self.vertices_on_face(face).map(usize::from));
             let vertex_coords_in = self.vertex_data[0].select(Axis(0), &indices);
             let vertex_coords_in = concatenate![Axis(1), vertex_coords_in, Array2::ones((indices.len(), 1))];
             for layer in 0..self.num_layers() {
-                let vertex_coords_out = self.vertex_data[layer].select(Axis(0), &indices);
-                let face_data = self.face_data[layer].index_axis(Axis(0), face.0);
-                let computed_coords_out = vertex_coords_in.dot(&face_data);
-                //println!("diff {face:?} at {layer}: {}", &computed_coords_out - &vertex_coords_out);
-                for i in 0..indices.len() {
-                    for j in 0..vertex_coords_out.ncols() {
-                        if !approx::abs_diff_eq!(computed_coords_out[(i,j)], vertex_coords_out[(i,j)], epsilon=1e-4) {
-                            println!("Not equal: {face:?} at {layer}: vertex {}, dim {j}", indices[i]);
-                            println!("{} * {} != {}", vertex_coords_in.row(i), face_data.column(j), vertex_coords_out[(i,j)]);
-                            println!("was {}", self.vertex_data[layer-1].select(Axis(0), &indices).column(j));
+                if self.continuous[layer] {
+                    let vertex_coords_out = self.vertex_data[layer].select(Axis(0), &indices);
+                    let face_data = self.face_data[layer].index_axis(Axis(0), face.0);
+                    let computed_coords_out = vertex_coords_in.dot(&face_data);
+                    //println!("diff {face:?} at {layer}: {}", &computed_coords_out - &vertex_coords_out);
+                    for i in 0..indices.len() {
+                        for j in 0..vertex_coords_out.ncols() {
+                            if !approx::abs_diff_eq!(computed_coords_out[(i,j)], vertex_coords_out[(i,j)], epsilon=1e-4) {
+                                println!("Not equal: {face:?} at {layer}: vertex {}, dim {j}", indices[i]);
+                                println!("{} * {} != {}", vertex_coords_in.row(i), face_data.column(j), vertex_coords_out[(i,j)]);
+                                println!("was {}", self.vertex_data[layer-1].select(Axis(0), &indices).column(j));
+                            }
                         }
                     }
+                    assert_abs_diff_eq!(&computed_coords_out, &vertex_coords_out, epsilon=1e-4);
                 }
-                assert_abs_diff_eq!(&computed_coords_out, &vertex_coords_out, epsilon=1e-4);
             }
         }
     }
@@ -949,25 +955,22 @@ impl Partition {
         //    * maybe also split the newly introduced edge needed, and repeat
     }
 
-    fn argmax_face_mask(&self, layer: usize, max: &[f32]) -> Array2<bool> {
+    fn argmax_face_index(&self, layer: usize, max: &[f32]) -> Vec<usize> {
         let acts = self.activations(layer);
-        let mut mask = Array2::from_elem((self.num_faces(), acts.ncols()), true);
-        let eps = 1e-5; // TODO: we shouldn't need epsilon here, we could instead look for diviation from maximum
-        for he in self.halfedges() {
-            if let Some(face) = self.face(he) {
-                let max = max[self.start(he).0];
-                mask.row_mut(face.0).zip_mut_with(&acts.row(self.start(he).0),
-                    |m, x| *m &= *x >= max - eps
+        let mut delta_from_max = Array1::zeros(acts.ncols());
+        self.faces().map(|face| {
+            // for every dim: how far is any vertex in this face below the maximum?
+            delta_from_max.fill(0.0);
+            for v in self.vertices_on_face(face) {
+                let max = max[v.0];
+                delta_from_max.zip_mut_with(&acts.row(v.0),
+                    |delta, x| *delta = f32::min(*delta, *x - max)
                 );
             }
-        }
-        mask
-    }
-    fn argmax_face_index(&self, layer: usize, max: &[f32]) -> Vec<usize> {
-        let mask = self.argmax_face_mask(layer, max);
-        Vec::from_iter(mask.rows().into_iter().map(
-            |row| row.iter().position(|x| *x).expect("Face has inconsistent argmax")
-        ))
+            // The argmax dimension is the one with the smallest deviation from the maximum at any vertex
+            // Ideally this would be 0, but numberical errors can change that.
+            argmax(delta_from_max.view())
+        }).collect()
     }
 
     // Neural network operations
@@ -985,6 +988,7 @@ impl Partition {
         let mut face_data = self.face_data[layer].clone();
         face_data.zip_mut_with(&face_mask.slice(s![.., NewAxis, ..]), |x, m| if !m { *x = 0.0; });
         self.face_data.push(face_data);
+        self.continuous.push(true);
     }
     /// Update partition by adding a ReLU layer
     /// This means:
@@ -1003,6 +1007,7 @@ impl Partition {
         let mut face_data = self.face_data[layer].clone();
         face_data.zip_mut_with(&face_mask.slice(s![.., NewAxis, ..]), |x, m| if !m { *x *= negative_slope; });
         self.face_data.push(face_data);
+        self.continuous.push(true);
     }
     pub fn leaky_relu(&mut self, negative_slope: f32) {
         self.leaky_relu_at(self.last_layer(), negative_slope);
@@ -1016,6 +1021,7 @@ impl Partition {
         self.face_data.push(face_data.insert_axis(Axis(2)));
         // New vertex data is just the max value
         self.vertex_data.push(max.insert_axis(Axis(1)));
+        self.continuous.push(true);
     }
     pub fn max_pool(&mut self) {
         self.max_pool_at(self.last_layer());
@@ -1033,6 +1039,7 @@ impl Partition {
         let acts = self.activations(layer);
         let vertex_argmax = Array::from_iter(acts.rows().into_iter().map(|row| argmax(row) as f32));
         self.vertex_data.push(vertex_argmax.insert_axis(Axis(1)));
+        self.continuous.push(false);
     }
     pub fn argmax_pool(&mut self) {
         self.argmax_pool_at(self.last_layer());
@@ -1052,6 +1059,7 @@ impl Partition {
             face_mask.insert_axis(Axis(1)).mapv(|x| if x { 1.0 } else {0.0})
         ];
         self.face_data.push(face_data);
+        self.continuous.push(false);
     }
     pub fn sign(&mut self) {
         self.sign_at(self.last_layer())
@@ -1089,6 +1097,7 @@ impl Partition {
         let mut new_face_data = new_face_data.into_shape_with_order((a,b,d)).unwrap();
         add_bias(new_face_data.index_axis_mut(Axis(1), 2));
         self.face_data.push(new_face_data);
+        self.continuous.push(true);
     }
 
     /// Append a layer that computes output using a linear transformation:
@@ -1436,6 +1445,7 @@ mod test {
         crate::nn::Linear::new_uniform(dim_hidden, dim_out, &mut rng).apply(&mut p);
         p.check_invariants();
         p.argmax_pool_at(p.last_layer());
+        p.check_invariants();
         // Note: face values do not match vertex value after argmax pool
         println!("{} faces", p.num_faces());
         if true {
@@ -1475,7 +1485,7 @@ mod test {
         println!("{} faces", p.num_faces());
         //println!("{p:?}");
         p.decision_boundary();
-        //let (_max, face_argmax) = p.split_by_argmax_at(p.last_layer());
+        p.check_invariants();
     }
 }
 
