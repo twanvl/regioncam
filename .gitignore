@@ -1,5 +1,6 @@
 .ipynb_checkpoints
+.venv
+.vscode
 /target
-/venv
 *.data
 *.old

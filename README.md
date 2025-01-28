@@ -7,16 +7,15 @@ Regioncam works by tracking the output of all neural network layers in the regio
 Compiling
 ---------
 
-Compiling Regioncam python bindings requires rust and [`maturin`](https://github.com/PyO3/maturin).
+Compiling the Regioncam python bindings requires rust and [`maturin`](https://github.com/PyO3/maturin).
 ```sh
 cd regioncam-python
 maturin develop --release --strip
 python
 ```
 
-Usage
+Usage of python interface
 -----
-
 
 ```python
 import regioncam
@@ -55,6 +54,8 @@ net = torch.nn.Sequential(
 )
 rc.add(net)
 ```
+
+See examples/ for an example of visualizing a trained torch network.
 
 Algorithm
 ---------
