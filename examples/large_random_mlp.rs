@@ -2,8 +2,8 @@ use std::time::Instant;
 
 use rand::rngs::SmallRng;
 use rand::SeedableRng;
-use regioncam::nn::{Linear, NNModule};
-use regioncam::Partition;
+use regioncam::nn::Linear;
+use regioncam::Regioncam;
 
 /// A (relatively) large MLP with a single hidden layer
 fn large_random_mlp() {
@@ -14,16 +14,16 @@ fn large_random_mlp() {
     let layer1 = Linear::new_uniform(dim_in, dim_hidden, &mut rng);
     let layer2 = Linear::new_uniform(dim_hidden, dim_out, &mut rng);
     // partition
-    let mut p = Partition::square(1.0);
-    layer1.apply(&mut p);
-    layer2.apply(&mut p);
-    p.relu();
-    println!("{} faces", p.num_faces());
+    let mut rc = Regioncam::square(1.0);
+    rc.add(&layer1);
+    rc.add(&layer2);
+    rc.relu();
+    println!("{} faces", rc.num_faces());
 }
 
 fn main() {
     let now = Instant::now();
     large_random_mlp();
     let elapsed = now.elapsed();
-    println!("Time: {elapsed:.3?}s");
+    println!("Time: {elapsed:.3?}");
 }

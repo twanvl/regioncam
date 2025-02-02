@@ -97,3 +97,12 @@ pub(crate) fn assign_row<T: Clone, D: Dimension + SliceArg0>(arr: &mut Array<T, 
     let (mut tgt_row, src_row) = arr.multi_slice_mut((tgt_slice, src_slice));
     tgt_row.assign(&src_row);
 }
+
+/// Remove row i from the array, by replacing row i with the last row and removing the last row.
+pub(crate) fn swap_remove_row<T: Clone, D: Dimension + SliceArg0>(arr: &mut Array<T, D>, i: usize) {
+    let last = arr.len_of(Axis(0)) - 1;
+    if i != last {
+        assign_row(arr, i, last);
+    }
+    pop_array(Axis(0), arr);
+}

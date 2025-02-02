@@ -1,34 +1,31 @@
 use std::sync::Arc;
 
 use ndarray::prelude::*;
+use ndarray::Data;
+use ndarray::OwnedRepr;
+use ndarray::RawData;
+use ndarray::RawDataClone;
 use rand::Rng;
 use rand_distr::{Distribution, Normal, Uniform};
 
-use crate::partition::*;
+use crate::regioncam::*;
 use crate::util::*;
 
 /// A neural network module
 pub trait NNModule {
-    fn apply(&self, p: &mut Partition);
+    fn add_to(&self, rc: &mut Regioncam, input_layer: LayerNr) -> LayerNr;
     fn forward(&self, x: &ArrayView2<f32>) -> Array2<f32>;
     // fn repr(&self) -> String;
 }
 
 /// A linear layer in a neural network
 #[derive(Clone, Debug)]
-pub struct Linear {
-    pub weight: Array2<f32>,
-    pub bias: Array1<f32>,
+pub struct LinearBase<S: RawData<Elem=f32> + RawDataClone + Data> {
+    pub weight: ArrayBase<S, Ix2>,
+    pub bias: ArrayBase<S, Ix1>,
 }
 
-fn randn<Sh: ShapeBuilder, R: Rng + ?Sized>(shape: Sh, mean: f32, std: f32, rng: &mut R) -> Array<f32, Sh::Dim> {
-    let distr = Normal::new(mean, std).unwrap();
-    Array::from_shape_simple_fn(shape, || distr.sample(rng))
-}
-fn randu<Sh: ShapeBuilder, R: Rng + ?Sized>(shape: Sh, low: f32, high: f32, rng: &mut R) -> Array<f32, Sh::Dim> {
-    let distr = Uniform::new(low, high);
-    Array::from_shape_simple_fn(shape, || distr.sample(rng))
-}
+pub type Linear = LinearBase<OwnedRepr<f32>>;
 
 impl Linear {
     pub fn new<R: Rng + ?Sized>(dim_in: usize, dim_out: usize, rng: &mut R) -> Linear {
@@ -48,9 +45,10 @@ impl Linear {
     }
 }
 
-impl NNModule for Linear {
-    fn apply(&self, p: &mut Partition) {
-        p.linear(&self.weight.view(), &self.bias.view());
+impl<S: RawData<Elem=f32> + RawDataClone + Data> NNModule for LinearBase<S> {
+    fn add_to(&self, rc: &mut Regioncam, input_layer: LayerNr) -> LayerNr {
+        rc.linear_at(input_layer, &self.weight.view(), &self.bias.view());
+        rc.last_layer()
     }
 
     fn forward(&self, x: &ArrayView2<f32>) -> Array2<f32> {
@@ -59,10 +57,11 @@ impl NNModule for Linear {
 }
 
 impl<M: NNModule> NNModule for [M] {
-    fn apply(&self, p: &mut Partition) {
+    fn add_to(&self, rc: &mut Regioncam, mut layer: LayerNr) -> LayerNr {
         for module in self {
-            module.apply(p);
+            layer = module.add_to(rc, layer);
         }
+        layer
     }
 
     fn forward(&self, x: &ArrayView2<f32>) -> Array2<f32> {
@@ -75,8 +74,8 @@ impl<M: NNModule> NNModule for [M] {
 }
 
 impl<M: NNModule> NNModule for Arc<M> {
-    fn apply(&self, p: &mut Partition) {
-        self.as_ref().apply(p)
+    fn add_to(&self, rc: &mut Regioncam, input_layer: LayerNr) -> LayerNr {
+        self.as_ref().add_to(rc, input_layer)
     }
     
     fn forward(&self, x: &ArrayView2<f32>) -> Array2<f32> {
@@ -95,18 +94,19 @@ pub enum Module {
 }
 
 impl NNModule for Module {
-    fn apply(&self, p: &mut Partition) {
+    fn add_to(&self, rc: &mut Regioncam, input_layer: LayerNr) -> LayerNr {
         use Module::*;
         match self {
-            Identity => (),
-            Linear(module) => module.apply(p),
-            ReLU => p.relu(),
-            LeakyReLU(negative_slope) => p.leaky_relu(*negative_slope),
-            Sequential(module) => module.apply(p),
+            Identity => input_layer,
+            Linear(module) => module.add_to(rc, input_layer),
+            ReLU => rc.relu_at(input_layer),
+            LeakyReLU(negative_slope) => rc.leaky_relu_at(input_layer, *negative_slope),
+            Sequential(module) => module.add_to(rc, input_layer),
             Residual(module) => {
-                let layer = p.last_layer();
-                module.apply(p);
-                p.residual(layer);
+                let layer = rc.last_layer();
+                module.add_to(rc, input_layer);
+                rc.residual(layer);
+                rc.last_layer()
             },
         }
     }

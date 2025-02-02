@@ -9,6 +9,7 @@ use rand::{rngs::SmallRng, Rng, SeedableRng};
 use svg_fmt::*;
 
 use crate::partition::*;
+use crate::regioncam::*;
 use crate::util::*;
 
 
@@ -49,7 +50,7 @@ impl SvgOptions {
     }
     
     /// Output to svg
-    pub fn write_svg(&self, p: &Partition, w: &mut dyn Write) -> std::io::Result<()> {
+    pub fn write_svg(&self, p: &Regioncam, w: &mut dyn Write) -> std::io::Result<()> {
         SvgWriter::new(p, self).write_svg(w)
     }
 }
@@ -62,7 +63,7 @@ pub struct MarkedPoint {
 /// Helper struct for writing a Partition to an svg file
 pub struct SvgWriter<'a> {
     options: &'a SvgOptions,
-    partition: &'a Partition,
+    regioncam: &'a Regioncam,
     bounding_box: Array1<Range<f32>>,
     value_range: Range<f32>,
     decision_boundary_layer: Option<usize>,
@@ -71,15 +72,15 @@ pub struct SvgWriter<'a> {
 }
 
 impl<'a> SvgWriter<'a> {
-    pub fn new(partition: &'a Partition, options: &'a SvgOptions) -> Self {
-        let bounding_box: ndarray::ArrayBase<ndarray::OwnedRepr<Range<f32>>, ndarray::Dim<[usize; 1]>> = bounding_box(&partition.inputs().view());
-        let values = partition.activations_last();
+    pub fn new(regioncam: &'a Regioncam, options: &'a SvgOptions) -> Self {
+        let bounding_box: ndarray::ArrayBase<ndarray::OwnedRepr<Range<f32>>, ndarray::Dim<[usize; 1]>> = bounding_box(&regioncam.inputs().view());
+        let values = regioncam.activations_last();
         let value_range = value_range(&values);
         let last_layer_is_classification = values.ncols() == 1;
-        let decision_boundary_layer = last_layer_is_classification.then_some(partition.last_layer());
+        let decision_boundary_layer = last_layer_is_classification.then_some(regioncam.last_layer());
         let rng = SmallRng::seed_from_u64(42);
 
-        SvgWriter { options, partition, bounding_box, value_range, decision_boundary_layer, points: &[], rng }
+        SvgWriter { options, regioncam, bounding_box, value_range, decision_boundary_layer, points: &[], rng }
     }
 
     /// Output to svg
@@ -109,7 +110,7 @@ impl<'a> SvgWriter<'a> {
     
     pub fn write_faces(&mut self, w: &mut dyn Write) -> std::io::Result<()> {
         // draw faces
-        for face in self.partition.faces() {
+        for face in self.regioncam.faces() {
             let path = self.face_to_path(face);
             let color = self.face_color(face);
             writeln!(w, "{}", path.fill(color))?;
@@ -119,9 +120,9 @@ impl<'a> SvgWriter<'a> {
 
     pub fn write_edges(&self, w: &mut dyn Write) -> std::io::Result<()> {
         // draw edges
-        for edge in self.partition.edges() {
-            let label = self.partition.edge_label(edge);
-            if self.options.draw_boundary || !(self.partition.is_boundary(edge) || label.layer == 0) {
+        for edge in self.regioncam.edges() {
+            let label = self.regioncam.edge_label(edge);
+            if self.options.draw_boundary || !(self.regioncam.is_boundary(edge) || label.layer == 0) {
                 let is_decision_boundary = Some(label.layer) == self.decision_boundary_layer;
                 let path = self.edge_to_path(edge)
                     .width(if is_decision_boundary { self.options.line_width_decision_boundary } else { self.options.line_width })
@@ -147,7 +148,7 @@ impl<'a> SvgWriter<'a> {
     }
 
     fn vertex_coord(&self, vertex: Vertex) -> (f32, f32) {
-        let inputs = self.partition.vertex_inputs(vertex);
+        let inputs = self.regioncam.vertex_inputs(vertex);
         self.point_coord(inputs)
     }
     fn point_coord(&self, inputs: ArrayView1<f32>) -> (f32, f32) {
@@ -160,8 +161,8 @@ impl<'a> SvgWriter<'a> {
     fn face_color(&mut self, face: Face) -> Color {
         if self.decision_boundary_layer.is_some() && self.options.face_color_by_value > 0.0 {
             // base face color on value of face
-            let face_centroid = self.partition.face_centroid(face);
-            let face_value = self.partition.face_activation_for(self.partition.last_layer(), face, face_centroid.view())[0];
+            let face_centroid = self.regioncam.face_centroid(face);
+            let face_value = self.regioncam.face_activation_for(self.regioncam.last_layer(), face, face_centroid.view())[0];
             // map to value range
             let t = where_in_range(face_value, &self.value_range);
             //
@@ -190,7 +191,7 @@ impl<'a> SvgWriter<'a> {
     }
 
     fn face_to_path(&self, face: Face) -> Path {
-        let mut iter = self.partition.vertices_on_face(face);
+        let mut iter = self.regioncam.vertices_on_face(face);
         let start_vertex = iter.next().unwrap();
         let start = self.vertex_coord(start_vertex);
         let path = path().move_to(start.0, start.1);
@@ -202,7 +203,7 @@ impl<'a> SvgWriter<'a> {
     }
 
     fn edge_to_path(&self, edge: Edge) -> LineSegment {
-        let (a,b) = self.partition.endpoints(edge);
+        let (a,b) = self.regioncam.endpoints(edge);
         let a = self.vertex_coord(a);
         let b = self.vertex_coord(b);
         line_segment(a.0, a.1, b.0, b.1)

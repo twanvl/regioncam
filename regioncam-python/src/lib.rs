@@ -14,11 +14,13 @@ use ::regioncam::*;
 
 #[pymodule(name = "regioncam")]
 mod regioncam {
+
     use super::*;
 
     #[pyclass]
-    struct Regioncam {
-        partition: Partition,
+    #[pyo3(name="Regioncam")]
+    struct PyRegioncam {
+        regioncam: Regioncam,
         plane: Option<Py<PyPlane>>,
         // options to use for svg visualization
         svg_options: SvgOptions,
@@ -27,7 +29,7 @@ mod regioncam {
     }
 
     #[pymethods]
-    impl Regioncam {
+    impl PyRegioncam {
         /// Create a Regioncam object.
         ///
         /// Parameters:
@@ -35,19 +37,19 @@ mod regioncam {
         #[new]
         #[pyo3(signature=(size=1.0))]
         fn new(size: f32) -> Self {
-            Self { partition: Partition::square(size), plane: None, svg_options: SvgOptions::default(), marked_points: vec![] }
+            Self { regioncam: Regioncam::square(size), plane: None, svg_options: SvgOptions::default(), marked_points: vec![] }
         }
         /// Create a Regioncam object with a circular region
         #[staticmethod]
         fn circle(radius: f32) -> Self {
-            Self { partition: Partition::circle(radius), plane: None, svg_options: SvgOptions::default(), marked_points: vec![] }
+            Self { regioncam: Regioncam::circle(radius), plane: None, svg_options: SvgOptions::default(), marked_points: vec![] }
         }
         /// Create a Regioncam object for a plane through the given points.
         #[staticmethod]
         #[pyo3(signature=(points, labels=vec![]))]
         fn through_points<'py>(#[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>, mut labels: Vec<String>) -> PyResult<Self> {
             let plane = Plane::through_points(&points.readonly().as_array());
-            let partition = Partition::from_plane(&plane);
+            let regioncam = Regioncam::from_plane(&plane);
             labels.resize(plane.points.nrows(), String::new());
             let marked_points = plane.points.rows().into_iter().zip(labels.into_iter()).map(
                     |(point,label)| {
@@ -56,7 +58,7 @@ mod regioncam {
                     }
                 ).collect();
             let plane = Py::new(points.py(), PyPlane(plane))?;
-            Ok(Self { partition, plane: Some(plane), svg_options: SvgOptions::default(), marked_points })
+            Ok(Self { regioncam, plane: Some(plane), svg_options: SvgOptions::default(), marked_points })
         }
 
         /// Mark points in the input space.
@@ -92,66 +94,66 @@ mod regioncam {
         /// The number of vertices in the partition.
         #[getter]
         fn num_vertices(&self) -> usize {
-            self.partition.num_vertices()
+            self.regioncam.num_vertices()
         }
         /// The number of edges in the partition.
         #[getter]
         fn num_edges(&self) -> usize {
-            self.partition.num_edges()
+            self.regioncam.num_edges()
         }
         /// The number of faces in the partition.
         #[getter]
         fn num_faces(&self) -> usize {
-            self.partition.num_faces()
+            self.regioncam.num_faces()
         }
         /// The number of layers
         #[getter]
         fn num_layers(&self) -> usize {
-            self.partition.num_layers()
+            self.regioncam.num_layers()
         }
         /// The index of the last layer
         #[getter]
         fn last_layer(&self) -> usize {
-            self.partition.last_layer()
+            self.regioncam.last_layer()
         }
 
         /// The 2D input coordinates for all vertices.
         #[getter]
         fn vertices<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
-            self.partition.inputs().to_pyarray(py)
+            self.regioncam.inputs().to_pyarray(py)
         }
         /// The output values / activations in the last layer, for all vertices.
         #[getter]
         fn vertex_outputs<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
-            self.partition.activations_last().to_pyarray(py)
+            self.regioncam.activations_last().to_pyarray(py)
         }
         /// The output values /  for all vertices, at a given layer
         fn vertex_outputs_at<'py>(&self, py: Python<'py>, layer: usize) -> Bound<'py, PyArray2<f32>> {
-            self.partition.activations(layer).to_pyarray(py)
+            self.regioncam.activations(layer).to_pyarray(py)
         }
 
         /// The output values for all faces.
         /// A point x in face f has output value  [x[0],x[1],1] @ face_outputs[f]
         #[getter]
         fn face_outputs<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray3<f32>> {
-            self.partition.face_activations().to_pyarray(py)
+            self.regioncam.face_activations().to_pyarray(py)
         }
         fn face_outputs_at<'py>(&self, py: Python<'py>, layer: usize) -> Bound<'py, PyArray3<f32>> {
-            self.partition.face_activations_at(layer).to_pyarray(py)
+            self.regioncam.face_activations_at(layer).to_pyarray(py)
         }
 
         /// List of faces / regions
         #[getter]
         fn faces<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-            PyList::new(py, self.partition.faces().map(PyFace))
+            PyList::new(py, self.regioncam.faces().map(PyFace))
         }
         fn faces2<'py>(slf: &Bound<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-            PyList::new(py, slf.borrow().partition.faces().map(|f| PyFace2(slf.clone().unbind(), f)))
+            PyList::new(py, slf.borrow().regioncam.faces().map(|f| PyFace2(slf.clone().unbind(), f)))
         }
         /// List of vertex ids in a face
         fn face_vertex_ids<'py>(&self, face: Bound<'py, PyFace>) -> Vec<usize> {
             let face = face.borrow().0;
-            self.partition.vertices_on_face(face).map(usize::from).collect()
+            self.regioncam.vertices_on_face(face).map(usize::from).collect()
         }
 
         /// Mapping from 2d space
@@ -204,9 +206,9 @@ mod regioncam {
         /// Parameters:
         ///  * `input_layer``: use the output of the given layer as input (default: last layer).
         #[pyo3(signature=(input_layer=None))]
-        fn relu(&mut self, input_layer: Option<usize>) {
-            let input_layer = input_layer.unwrap_or(self.partition.last_layer());
-            self.partition.relu_at(input_layer)
+        fn relu(&mut self, input_layer: Option<usize>) -> usize {
+            let input_layer = input_layer.unwrap_or(self.regioncam.last_layer());
+            self.regioncam.relu_at(input_layer)
         }
 
         /// Add a new layer that applies a LeakyReLU operation.
@@ -215,9 +217,9 @@ mod regioncam {
         ///  * `negative_slope`: multiplicative factor for negative inputs.
         ///  * `input_layer``: use the output of the given layer as input (default: last layer).
         #[pyo3(signature=(negative_slope, input_layer=None))]
-        fn leaky_relu(&mut self, negative_slope: f32, input_layer: Option<usize>) {
-            let input_layer = input_layer.unwrap_or(self.partition.last_layer());
-            self.partition.leaky_relu_at(input_layer, negative_slope)
+        fn leaky_relu(&mut self, negative_slope: f32, input_layer: Option<usize>) -> usize {
+            let input_layer = input_layer.unwrap_or(self.regioncam.last_layer());
+            self.regioncam.leaky_relu_at(input_layer, negative_slope)
         }
 
         /// Add a max pooling layer.
@@ -225,9 +227,9 @@ mod regioncam {
         /// Parameters:
         ///  * `input_layer``: use the output of the given layer as input (default: last layer).
         #[pyo3(signature=(input_layer=None))]
-        fn max_pool(&mut self, input_layer: Option<usize>) {
-            let input_layer = input_layer.unwrap_or(self.partition.last_layer());
-            self.partition.max_pool_at(input_layer)
+        fn max_pool(&mut self, input_layer: Option<usize>) -> usize {
+            let input_layer = input_layer.unwrap_or(self.regioncam.last_layer());
+            self.regioncam.max_pool_at(input_layer)
         }
 
         /// Add an argmax pooling layer. This can be used as a classification like softmax.
@@ -235,9 +237,9 @@ mod regioncam {
         /// Parameters:
         ///  * `input_layer``: use the output of the given layer as input (default: last layer).
         #[pyo3(signature=(input_layer=None))]
-        fn argmax_pool(&mut self, input_layer: Option<usize>) {
-            let input_layer = input_layer.unwrap_or(self.partition.last_layer());
-            self.partition.argmax_pool_at(input_layer)
+        fn argmax_pool(&mut self, input_layer: Option<usize>) -> usize {
+            let input_layer = input_layer.unwrap_or(self.regioncam.last_layer());
+            self.regioncam.argmax_pool_at(input_layer)
         }
 
         /// Add an argmax pooling layer. This can be used as a classification like softmax.
@@ -245,9 +247,9 @@ mod regioncam {
         /// Parameters:
         ///  * `input_layer``: use the output of the given layer as input (default: last layer).
         #[pyo3(signature=(input_layer=None))]
-        fn sign(&mut self, input_layer: Option<usize>) {
-            let input_layer = input_layer.unwrap_or(self.partition.last_layer());
-            self.partition.sign_at(input_layer)
+        fn sign(&mut self, input_layer: Option<usize>) -> usize {
+            let input_layer = input_layer.unwrap_or(self.regioncam.last_layer());
+            self.regioncam.sign_at(input_layer)
         }
 
         /// Add a decision boundary.
@@ -257,9 +259,9 @@ mod regioncam {
         /// Parameters:
         ///  * `input_layer``: use the output of the given layer as input (default: last layer).
         #[pyo3(signature=(input_layer=None))]
-        fn decision_boundary(&mut self, input_layer: Option<usize>) {
-            let input_layer = input_layer.unwrap_or(self.partition.last_layer());
-            self.partition.decision_boundary_at(input_layer)
+        fn decision_boundary(&mut self, input_layer: Option<usize>) -> usize {
+            let input_layer = input_layer.unwrap_or(self.regioncam.last_layer());
+            self.regioncam.decision_boundary_at(input_layer)
         }
 
         /// Add a new layer that applies a linear transformation,
@@ -278,9 +280,9 @@ mod regioncam {
                 #[pyo3(from_py_with="downcast_array")] weight: Bound<'py, PyArray2<f32>>,
                 #[pyo3(from_py_with="downcast_array")] bias: Bound<'py, PyArray1<f32>>,
                 input_layer: Option<usize>
-            ) {
-            let input_layer = input_layer.unwrap_or(self.partition.last_layer());
-            self.partition.linear_at(input_layer, &weight.readonly().as_array(), &bias.readonly().as_array());
+            ) -> usize {
+            let input_layer = input_layer.unwrap_or(self.regioncam.last_layer());
+            self.regioncam.linear_at(input_layer, &weight.readonly().as_array(), &bias.readonly().as_array())
         }
 
         /// Add a neural network or network layer.
@@ -297,34 +299,33 @@ mod regioncam {
         }
     }
 
-    impl Regioncam {
+    impl PyRegioncam {
         fn do_write_svg(&self, svg_opts: SvgOptions, mut w: &mut dyn std::io::Write) -> std::io::Result<()> {
-            let mut writer = SvgWriter::new(&self.partition, &svg_opts);
+            let mut writer = SvgWriter::new(&self.regioncam, &svg_opts);
             writer.points = &self.marked_points;
             writer.write_svg(&mut w)
         }
 
         fn add_layer<'py>(&mut self, py: Python<'py>, layer: &Layer, input_layer: Option<usize>) -> PyResult<usize> {
-            let input_layer = input_layer.unwrap_or(self.partition.last_layer());
+            let input_layer = input_layer.unwrap_or(self.regioncam.last_layer());
             match layer {
                 Layer::Linear { weight, bias } => {
                     let weight = weight.bind(py).readonly();
                     let bias   = bias.bind(py).readonly();
-                    self.partition.linear_at(input_layer, &weight.as_array(), &bias.as_array());
-                    Ok(self.partition.last_layer())
+                    Ok(self.regioncam.linear_at(input_layer, &weight.as_array(), &bias.as_array()))
                 }
                 Layer::ReLU() => {
-                    self.partition.relu_at(input_layer);
-                    Ok(self.partition.last_layer())
+                    self.regioncam.relu_at(input_layer);
+                    Ok(self.regioncam.last_layer())
                 }
                 Layer::LeakyReLU { negative_slope } => {
-                    self.partition.leaky_relu_at(input_layer, *negative_slope);
-                    Ok(self.partition.last_layer())
+                    self.regioncam.leaky_relu_at(input_layer, *negative_slope);
+                    Ok(self.regioncam.last_layer())
                 }
                 Layer::Residual { layer } => {
                     let after_layer = self.add_layer(py, layer.get(), Some(input_layer))?;
-                    self.partition.sum(input_layer, after_layer);
-                    Ok(self.partition.last_layer())
+                    self.regioncam.sum(input_layer, after_layer);
+                    Ok(self.regioncam.last_layer())
                 }
                 Layer::Sequential { layers } => {
                     let mut input_layer = input_layer;
@@ -341,14 +342,14 @@ mod regioncam {
     pub struct PyFace(Face);
 
     #[pyclass(name="Face")]
-    pub struct PyFace2(Py<Regioncam>, Face);
+    pub struct PyFace2(Py<PyRegioncam>, Face);
     #[pymethods]
     impl PyFace2 {
         /// Ids of all vertices that make up this face
         #[getter]
         fn vertex_ids<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<usize>> {
             let rc = self.0.borrow(py);
-            let vertex_ids = rc.partition.vertices_on_face(self.1).map(usize::from);
+            let vertex_ids = rc.regioncam.vertices_on_face(self.1).map(usize::from);
             PyArray1::from_iter(py, vertex_ids)
         }
     }
@@ -424,6 +425,7 @@ mod regioncam {
             Ok(self.shape(py)?[1])
         }
     }
+
     impl Layer {
         fn shape<'py>(&self, py: Python<'py>) -> PyResult<Dim<[usize;2]>> {
             match self {
