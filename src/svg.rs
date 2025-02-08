@@ -137,10 +137,12 @@ impl<'a> SvgWriter<'a> {
         for point in self.points {
             let (x, y) = self.point_coord(point.position.as_ref().into());
             let radius = self.options.point_size * 0.5;
-            let circle = Circle { x, y, radius, style: Style::default(), comment: None };
-            let circle = circle.fill(black());
-            writeln!(w, "{}", circle)?;
-            if !point.label.is_empty() {
+            if radius > 0.0 {
+                let circle = Circle { x, y, radius, style: Style::default(), comment: None };
+                let circle = circle.fill(black());
+                writeln!(w, "{}", circle)?;
+            }
+            if !point.label.is_empty() && self.options.label_size > 0.0 {
                 writeln!(w, "{}", text(x + radius, y - radius, &point.label).size(self.options.label_size))?;
             }
         }
