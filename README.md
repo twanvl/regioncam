@@ -35,7 +35,7 @@ rc.write_svg("example.svg")
 # Inspect regions
 print(f"Created {rc.num_faces} regions")
 for face in rc.faces:
-    print(rc.face_vertex_ids(face))
+    print(face.vertex_ids)
 ```
 
 Produces:  

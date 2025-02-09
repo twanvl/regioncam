@@ -1,6 +1,6 @@
 
 use std::fmt::Debug;
-use ndarray::{array, concatenate, s, Array, Array1, Array2, Array3, ArrayView1, ArrayView2, ArrayView3, ArrayViewMut2, Axis, NewAxis};
+use ndarray::{array, concatenate, s, Array, Array1, Array2, Array3, ArrayView1, ArrayView2, ArrayViewMut2, Axis, NewAxis};
 use approx::assert_abs_diff_eq;
 
 use crate::util::*;
@@ -18,6 +18,14 @@ pub struct EdgeLabel {
 }
 
 pub type LayerNr = usize;
+
+enum LayerType {
+    /// ReLU like layers
+    ReLU{ face_mask: Array2<bool> },
+    Argmax{ face_argmax: Array1<usize> },
+    Linear,
+    Input,
+}
 
 /// All data for a layer
 #[derive(Debug, Clone, PartialEq)]
@@ -144,11 +152,11 @@ impl Regioncam {
     pub fn last_layer(&self) -> usize {
         self.num_layers() - 1
     }
-    pub fn activations(&self, layer: usize) -> ArrayView2<f32> {
-        self.layers[layer].vertex_data.view()
+    pub fn activations(&self, layer: usize) -> &Array2<f32> {
+        &self.layers[layer].vertex_data
     }
-    pub fn activations_last(&self) -> ArrayView2<f32> {
-        self.layers.last().unwrap().vertex_data.view()
+    pub fn activations_last(&self) -> &Array2<f32> {
+        &self.layers.last().unwrap().vertex_data
     }
     pub fn inputs(&self) -> &Array2<f32> {
         &self.layers[0].vertex_data
@@ -156,10 +164,10 @@ impl Regioncam {
     pub fn vertex_inputs(&self, vertex: Vertex) -> ArrayView1<f32> {
         self.layers[0].vertex_data.row(vertex.index())
     }
-    pub fn face_activations_at(&self, layer: usize) -> ArrayView3<f32> {
-        self.layers[layer].face_data.view()
+    pub fn face_activations_at(&self, layer: usize) -> &Array3<f32> {
+        &self.layers[layer].face_data
     }
-    pub fn face_activations(&self) -> ArrayView3<f32> {
+    pub fn face_activations(&self) -> &Array3<f32> {
         self.face_activations_at(self.last_layer())
     }
 

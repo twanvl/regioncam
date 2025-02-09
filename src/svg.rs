@@ -75,7 +75,7 @@ impl<'a> SvgWriter<'a> {
     pub fn new(regioncam: &'a Regioncam, options: &'a SvgOptions) -> Self {
         let bounding_box: ndarray::ArrayBase<ndarray::OwnedRepr<Range<f32>>, ndarray::Dim<[usize; 1]>> = bounding_box(&regioncam.inputs().view());
         let values = regioncam.activations_last();
-        let value_range = value_range(&values);
+        let value_range = value_range(&values.view());
         let last_layer_is_classification = values.ncols() == 1;
         let decision_boundary_layer = last_layer_is_classification.then_some(regioncam.last_layer());
         let rng = SmallRng::seed_from_u64(42);

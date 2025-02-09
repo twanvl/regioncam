@@ -5,10 +5,10 @@ use numpy::*;
 use std::fs::File;
 use std::fmt::Write;
 
-use ndarray::{Dim, Dimension};
-use pyo3::exceptions::{PyAttributeError, PyValueError};
+use ndarray::{Axis, Dim, Dimension};
+use pyo3::exceptions::{PyAttributeError, PyIndexError, PyValueError};
 use pyo3::types::{PyDict, PyString, PyTuple};
-use pyo3::{intern, PyClass, DowncastError};
+use pyo3::{intern, PyClass, DowncastError, PyTraverseError, PyVisit};
 
 use ::regioncam::*;
 
@@ -92,43 +92,51 @@ mod regioncam {
         }
 
         /// The number of vertices in the partition.
+        /// Equivalent to `len(self.vertices)`
         #[getter]
         fn num_vertices(&self) -> usize {
             self.regioncam.num_vertices()
         }
         /// The number of edges in the partition.
+        /// Equivalent to `len(self.edges)`
         #[getter]
         fn num_edges(&self) -> usize {
             self.regioncam.num_edges()
         }
         /// The number of faces in the partition.
+        /// Equivalent to `len(self.faces)`
         #[getter]
         fn num_faces(&self) -> usize {
             self.regioncam.num_faces()
         }
         /// The number of layers
+        /// Equivalent to `len(self.layers)`
         #[getter]
         fn num_layers(&self) -> usize {
             self.regioncam.num_layers()
         }
-        /// The index of the last layer
+        /// The last layer
+        /// Equivalent to `self.layers[-1]`
         #[getter]
-        fn last_layer(&self) -> usize {
-            self.regioncam.last_layer()
+        fn last_layer<'py>(slf: Bound<'py, PyRegioncam>) -> PyLayer {
+            let layer = slf.borrow().regioncam.last_layer();
+            PyLayer { rc: slf.unbind(), layer }
         }
 
         /// The 2D input coordinates for all vertices.
+        /// Equivalent to `self.layers[0].vertex_activations`
         #[getter]
-        fn vertices<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
+        fn vertex_inputs<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
             self.regioncam.inputs().to_pyarray(py)
         }
         /// The output values / activations in the last layer, for all vertices.
+        /// Equivalent to `self.layers[-1].vertex_activations`
         #[getter]
         fn vertex_outputs<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
             self.regioncam.activations_last().to_pyarray(py)
         }
         /// The output values /  for all vertices, at a given layer
-        fn vertex_outputs_at<'py>(&self, py: Python<'py>, layer: usize) -> Bound<'py, PyArray2<f32>> {
+        fn vertex_activations<'py>(&self, py: Python<'py>, layer: usize) -> Bound<'py, PyArray2<f32>> {
             self.regioncam.activations(layer).to_pyarray(py)
         }
 
@@ -138,22 +146,29 @@ mod regioncam {
         fn face_outputs<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray3<f32>> {
             self.regioncam.face_activations().to_pyarray(py)
         }
-        fn face_outputs_at<'py>(&self, py: Python<'py>, layer: usize) -> Bound<'py, PyArray3<f32>> {
+        fn face_activations<'py>(&self, py: Python<'py>, layer: usize) -> Bound<'py, PyArray3<f32>> {
             self.regioncam.face_activations_at(layer).to_pyarray(py)
         }
 
-        /// List of faces / regions
+        /// Sequence of all faces / regions
         #[getter]
-        fn faces<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-            PyList::new(py, self.regioncam.faces().map(PyFace))
+        fn faces(slf: Py<PyRegioncam>) -> Faces {
+            Faces(slf)
         }
-        fn faces2<'py>(slf: &Bound<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-            PyList::new(py, slf.borrow().regioncam.faces().map(|f| PyFace2(slf.clone().unbind(), f)))
+        /// Sequence of all vertices
+        #[getter]
+        fn vertices(slf: Py<PyRegioncam>) -> Vertices {
+            Vertices(slf)
         }
-        /// List of vertex ids in a face
-        fn face_vertex_ids<'py>(&self, face: Bound<'py, PyFace>) -> Vec<usize> {
-            let face = face.borrow().0;
-            self.regioncam.vertices_on_face(face).map(usize::from).collect()
+        /// Sequence of all edges
+        #[getter]
+        fn edges(slf: Py<PyRegioncam>) -> Edges {
+            Edges(slf)
+        }
+        /// Sequence of all layers
+        #[getter]
+        fn layers(slf: Py<PyRegioncam>) -> Layers {
+            Layers(slf)
         }
 
         /// Mapping from 2d space
@@ -294,7 +309,7 @@ mod regioncam {
         /// Returns:
         ///  * layer number of the output
         #[pyo3(signature=(layer, input_layer=None))]
-        fn add<'a,'py>(&mut self, py: Python<'py>, #[pyo3(from_py_with="nn::to_layer")] layer: PyCow<'a, 'py, Layer>, input_layer: Option<usize>) -> PyResult<usize> {
+        fn add<'a,'py>(&mut self, py: Python<'py>, #[pyo3(from_py_with="nn::to_layer")] layer: PyCow<'a, 'py, PyNNModule>, input_layer: Option<usize>) -> PyResult<usize> {
             self.add_layer(py, &layer.borrow(), input_layer)
         }
     }
@@ -306,28 +321,28 @@ mod regioncam {
             writer.write_svg(&mut w)
         }
 
-        fn add_layer<'py>(&mut self, py: Python<'py>, layer: &Layer, input_layer: Option<usize>) -> PyResult<usize> {
+        fn add_layer<'py>(&mut self, py: Python<'py>, module: &PyNNModule, input_layer: Option<usize>) -> PyResult<usize> {
             let input_layer = input_layer.unwrap_or(self.regioncam.last_layer());
-            match layer {
-                Layer::Linear { weight, bias } => {
+            match module {
+                PyNNModule::Linear { weight, bias } => {
                     let weight = weight.bind(py).readonly();
                     let bias   = bias.bind(py).readonly();
                     Ok(self.regioncam.linear_at(input_layer, &weight.as_array(), &bias.as_array()))
                 }
-                Layer::ReLU() => {
+                PyNNModule::ReLU() => {
                     self.regioncam.relu_at(input_layer);
                     Ok(self.regioncam.last_layer())
                 }
-                Layer::LeakyReLU { negative_slope } => {
+                PyNNModule::LeakyReLU { negative_slope } => {
                     self.regioncam.leaky_relu_at(input_layer, *negative_slope);
                     Ok(self.regioncam.last_layer())
                 }
-                Layer::Residual { layer } => {
+                PyNNModule::Residual { layer } => {
                     let after_layer = self.add_layer(py, layer.get(), Some(input_layer))?;
                     self.regioncam.sum(input_layer, after_layer);
                     Ok(self.regioncam.last_layer())
                 }
-                Layer::Sequential { layers } => {
+                PyNNModule::Sequential { layers } => {
                     let mut input_layer = input_layer;
                     for item in layers {
                         input_layer = self.add_layer(py, item.get(), Some(input_layer))?;
@@ -338,21 +353,199 @@ mod regioncam {
         }
     }
 
-    #[pyclass(name="Face")]
-    pub struct PyFace(Face);
 
+    /// A face in a regioncam
     #[pyclass(name="Face")]
-    pub struct PyFace2(Py<PyRegioncam>, Face);
+    pub struct PyFace {
+        rc: Py<PyRegioncam>,
+        face: Face,
+    }
     #[pymethods]
-    impl PyFace2 {
+    impl PyFace {
+        fn __index__(&self) -> usize {
+            self.face.index()
+        }
+        fn __repr__(&self) -> String {
+            format!("Face({})", self.face.index())
+        }
+        /// The list of vertices that make up this face
+        #[getter]
+        fn vertices<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+            let pyrc = self.rc.bind(py);
+            let rc = pyrc.borrow();
+            let vertices = rc.regioncam.vertices_on_face(self.face);
+            //let vertices = vertices.map(|vertex| PyVertex{ rc: pyrc.clone().unbind(), vertex});
+            let vertices = vertices.map(|vertex| PyVertex{ rc: self.rc.clone_ref(py), vertex});
+            PyList::new(py, vertices.collect::<Vec<_>>())
+        }
         /// Ids of all vertices that make up this face
         #[getter]
         fn vertex_ids<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<usize>> {
-            let rc = self.0.borrow(py);
-            let vertex_ids = rc.regioncam.vertices_on_face(self.1).map(usize::from);
+            let rc = self.rc.borrow(py);
+            let vertex_ids = rc.regioncam.vertices_on_face(self.face).map(usize::from);
             PyArray1::from_iter(py, vertex_ids)
         }
+        /// Values at a given layer
+        fn activations<'py>(&self, py: Python<'py>, layer: usize) -> Bound<'py, PyArray2<f32>> {
+            let rc = self.rc.borrow(py);
+            let row = rc.regioncam.face_activations_at(layer).index_axis(Axis(0), self.face.index());
+            row.to_pyarray(py)
+        }
+        /// Input values
+        #[getter]
+        fn inputs<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
+            self.activations(py, 0)
+        }
+        /// Output values
+        #[getter]
+        fn outputs<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
+            let rc = self.rc.borrow(py);
+            self.activations(py, rc.regioncam.last_layer())
+        }
+        fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+            visit.call(&self.rc)
+        }
     }
+
+    /// A vertex in a regioncam
+    #[pyclass]
+    pub struct PyVertex {
+        rc: Py<PyRegioncam>,
+        vertex: Vertex,
+    }
+    #[pymethods]
+    impl PyVertex {
+        fn __index__(&self) -> usize {
+            self.vertex.index()
+        }
+        fn __repr__(&self) -> String {
+            format!("Vertex({})", self.vertex.index())
+        }
+        /// Values at a given layer
+        fn activations<'py>(&self, py: Python<'py>, layer: usize) -> Bound<'py, PyArray1<f32>> {
+            let rc = self.rc.borrow(py);
+            let row = rc.regioncam.activations(layer).row(self.vertex.index());
+            row.to_pyarray(py)
+        }
+        /// Input values
+        #[getter]
+        fn inputs<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f32>> {
+            self.activations(py, 0)
+        }
+        /// Output values
+        #[getter]
+        fn outputs<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f32>> {
+            let rc = self.rc.borrow(py);
+            self.activations(py, rc.regioncam.last_layer())
+        }
+        fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+            visit.call(&self.rc)
+        }
+    }
+
+    /// A vertex in a regioncam
+    #[pyclass]
+    pub struct PyEdge {
+        rc: Py<PyRegioncam>,
+        edge: Edge,
+    }
+    #[pymethods]
+    impl PyEdge {
+        fn __index__(&self) -> usize {
+            self.edge.index()
+        }
+        fn __repr__(&self) -> String {
+            format!("Edge({})", self.edge.index())
+        }
+        #[getter]
+        fn vertices<'py>(&self, py: Python<'py>) -> [PyVertex; 2] {
+            let rc = self.rc.borrow(py);
+            let endpoints = rc.regioncam.endpoints(self.edge);
+            [PyVertex{ rc: self.rc.clone_ref(py), vertex: endpoints.0 },
+             PyVertex{ rc: self.rc.clone_ref(py), vertex: endpoints.1 }]
+        }
+        #[getter]
+        fn faces<'py>(&self, py: Python<'py>) -> [Option<PyFace>; 2] {
+            let rc: PyRef<'_, PyRegioncam> = self.rc.borrow(py);
+            let faces = rc.regioncam.edge_faces(self.edge);
+            [faces.0.map(|face| PyFace{ rc: self.rc.clone_ref(py), face }),
+             faces.1.map(|face| PyFace{ rc: self.rc.clone_ref(py), face })]
+        }
+        #[getter]
+        fn is_boundary<'py>(&self, py: Python<'py>) -> bool {
+            let rc: PyRef<'_, PyRegioncam> = self.rc.borrow(py);
+            rc.regioncam.is_boundary(self.edge)
+        }
+        fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+            visit.call(&self.rc)
+        }
+    }
+
+    /// A layer in a regioncam
+    #[pyclass]
+    pub struct PyLayer {
+        rc: Py<PyRegioncam>,
+        layer: LayerNr,
+    }
+    #[pymethods]
+    impl PyLayer {
+        fn __index__(&self) -> usize {
+            self.layer
+        }
+        fn __repr__(&self) -> String {
+            format!("Layer({})", self.layer)
+        }
+        /// Vertex values
+        #[getter]
+        fn vertex_activations<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
+            let rc = self.rc.borrow(py);
+            rc.regioncam.activations(self.layer).to_pyarray(py)
+        }
+        #[getter]
+        fn face_activations<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray3<f32>> {
+            let rc = self.rc.borrow(py);
+            rc.regioncam.face_activations_at(self.layer).to_pyarray(py)
+        }
+        fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+            visit.call(&self.rc)
+        }
+    }
+    
+    // Collections
+
+    /// Wrap an indexable collection as a Python sequence
+    macro_rules! declare_pysequence {
+        ($list:ident, $num_items:ident, $type:ty, $ctor:expr) => {
+            #[pyclass]
+            pub struct $list(Py<PyRegioncam>);
+            #[pymethods]
+            impl $list {
+                fn __len__<'py>(&self, py: Python<'py>) -> usize {
+                    self.0.borrow(py).$num_items()
+                }
+                fn __getitem__<'py>(&self, py: Python<'py>, index: isize) -> PyResult<$type> {
+                    let len = self.__len__(py);
+                    let index = if index < 0 {
+                        (len as isize + index) as usize
+                    } else {
+                        index as usize
+                    };
+                    if index < len {
+                        let rc = self.0.clone_ref(py);
+                        Ok($ctor(rc, index))
+                    } else {
+                        Err(PyIndexError::new_err("index out of range"))
+                    }
+                }
+            }
+        };
+    }
+
+    declare_pysequence!(Faces, num_faces, PyFace, (|rc, index| PyFace { rc, face: Face::from(index) }));
+    declare_pysequence!(Vertices, num_vertices, PyVertex, (|rc, index| PyVertex { rc, vertex: Vertex::from(index) }));
+    declare_pysequence!(Edges, num_edges, PyEdge, (|rc, index| PyEdge { rc, edge: Edge::from(index) }));
+    declare_pysequence!(Layers, num_layers, PyLayer, (|rc, index| PyLayer { rc, layer: index }));
+
 
     /// A plane through points in a high dimensional space
     #[pyclass]
@@ -384,8 +577,8 @@ mod regioncam {
     
     /// A layer in a neural network
     #[pyclass]
-    #[pyo3(frozen)]
-    pub enum Layer {
+    #[pyo3(frozen, name="Module")]
+    pub enum PyNNModule {
         /// A linear transformation
         Linear {
             weight: Py<PyArray2<f32>>,
@@ -399,16 +592,16 @@ mod regioncam {
         },
         /// A residual connection around a network layer
         Residual {
-            layer: Py<Layer>,
+            layer: Py<PyNNModule>,
         },
         /// A sequence of network layers
         Sequential {
-            layers: Vec<Py<Layer>>,
+            layers: Vec<Py<PyNNModule>>,
         },
     }
 
     #[pymethods]
-    impl Layer {
+    impl PyNNModule {
         fn __repr__<'py>(&self, py: Python<'py>) -> PyResult<String> {
             let mut out = String::new();
             self.to_string(py, 0, &mut out)?;
@@ -424,12 +617,31 @@ mod regioncam {
         fn out_features<'py>(&self, py: Python<'py>) -> PyResult<usize> {
             Ok(self.shape(py)?[1])
         }
+        // GC traversal
+        fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+            match self {
+                PyNNModule::Linear {weight, bias} => {
+                    visit.call(weight)?;
+                    visit.call(bias)?;
+                },
+                PyNNModule::Residual {layer} => {
+                    visit.call(layer)?;
+                },
+                PyNNModule::Sequential {layers} => {
+                    for layer in layers {
+                        visit.call(layer)?;
+                    }
+                }
+                _ => ()
+            }
+            Ok(())
+        }
     }
 
-    impl Layer {
+    impl PyNNModule {
         fn shape<'py>(&self, py: Python<'py>) -> PyResult<Dim<[usize;2]>> {
             match self {
-                Layer::Linear { weight, .. } => Ok(weight.bind(py).dims()),
+                PyNNModule::Linear { weight, .. } => Ok(weight.bind(py).dims()),
                 _ => Err(PyAttributeError::new_err("shape undefined for this layer type"))
             }
         }
@@ -440,24 +652,24 @@ mod regioncam {
                 }
             }
             match self {
-                Layer::Linear { .. } => {
+                PyNNModule::Linear { .. } => {
                     let shape = self.shape(py)?;
                     writeln!(w, "Linear(in_features={}, out_features={})", shape[0], shape[1]).unwrap();
                 }
-                Layer::ReLU() => {
+                PyNNModule::ReLU() => {
                     writeln!(w, "ReLU").unwrap();
                 }
-                Layer::LeakyReLU { negative_slope } => {
+                PyNNModule::LeakyReLU { negative_slope } => {
                     writeln!(w,"LeakyReLU({negative_slope})").unwrap();
                 }
-                Layer::Residual { layer } => {
+                PyNNModule::Residual { layer } => {
                     writeln!(w, "Residual(").unwrap();
                     write_indent(w, indent+1);
                     layer.get().to_string(py, indent + 1, w)?;
                     write_indent(w, indent);
                     writeln!(w, ")").unwrap();
                 }
-                Layer::Sequential { layers } => {
+                PyNNModule::Sequential { layers } => {
                     writeln!(w, "Sequential(").unwrap();
                     for (layer, i) in layers.iter().zip(0..) {
                         write_indent(w, indent + 1);
@@ -482,53 +694,53 @@ mod regioncam {
         fn linear<'py>(
                 #[pyo3(from_py_with="downcast_array")] weight: Bound<'py, PyArray2<f32>>,
                 #[pyo3(from_py_with="downcast_array")] bias: Bound<'py, PyArray1<f32>>,
-            ) -> Layer {
+            ) -> PyNNModule {
             assert_eq!(weight.dims()[1], bias.dims()[0]);
-            Layer::Linear { weight: weight.unbind(), bias: bias.unbind() }
+            PyNNModule::Linear { weight: weight.unbind(), bias: bias.unbind() }
         }
 
         /// A rectified linear activation function
         #[pyfunction]
         #[pyo3(name="ReLU")]
-        fn relu() -> Layer {
-            Layer::ReLU()
+        fn relu() -> PyNNModule {
+            PyNNModule::ReLU()
         }
 
         /// A leaky relu activation function
         #[pyfunction]
         #[pyo3(name="LeakyReLU", signature=(negative_slope=1e-2))]
-        fn leaky_relu(negative_slope: f32) -> Layer {
-            Layer::LeakyReLU { negative_slope }
+        fn leaky_relu(negative_slope: f32) -> PyNNModule {
+            PyNNModule::LeakyReLU { negative_slope }
         }
 
         /// A leaky relu activation function
         #[pyfunction]
         #[pyo3(name="Residual")]
-        fn residual(layer: Py<Layer>) -> Layer {
-            Layer::Residual { layer }
+        fn residual(layer: Py<PyNNModule>) -> PyNNModule {
+            PyNNModule::Residual { layer }
         }
 
         /// A sequence of network layers
         #[pyfunction]
         #[pyo3(name="Sequential", signature=(*layers))]
-        fn sequential(layers: Vec<Py<Layer>>) -> Layer {
-            Layer::Sequential { layers }
+        fn sequential(layers: Vec<Py<PyNNModule>>) -> PyNNModule {
+            PyNNModule::Sequential { layers }
         }
 
         /// An identity layer
         #[pyfunction]
         #[pyo3(name="Identity")]
-        fn identity() -> Layer {
-            Layer::Sequential { layers: vec![] }
+        fn identity() -> PyNNModule {
+            PyNNModule::Sequential { layers: vec![] }
         }
 
         /// Convert a torch layer into a Regioncam layer
         #[pyfunction]
-        fn convert<'py>(arg: &Bound<'py, PyAny>) -> PyResult<Bound<'py, Layer>> {
+        fn convert<'py>(arg: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyNNModule>> {
             to_layer(arg)?.into_bound(arg.py())
         }
 
-        pub fn to_layer<'a,'py>(arg: &'a Bound<'py, PyAny>) -> PyResult<PyCow<'a, 'py, Layer>> {
+        pub fn to_layer<'a,'py>(arg: &'a Bound<'py, PyAny>) -> PyResult<PyCow<'a, 'py, PyNNModule>> {
             if let Ok(layer) = arg.downcast() {
                 Ok(PyCow::Bound(layer))
             } else if qualname(arg) == "torch.nn.modules.linear.Linear" {
