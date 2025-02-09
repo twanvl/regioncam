@@ -19,6 +19,8 @@ pub struct EdgeLabel {
 
 pub type LayerNr = usize;
 
+/// All data for a layer
+#[derive(Debug, Clone, PartialEq)]
 struct Layer {
     vertex_data: Array2<f32>, // vertex -> f32[D_l]
     face_data: Array3<f32>,   // face -> f32[D_in, D_F]
@@ -38,11 +40,8 @@ impl Layer {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Regioncam {
     partition: Partition,
-    /// Data associated with vertices.
-    /// This is the output of layer l in the neural network.
-    vertex_data: Vec<Array2<f32>>, // layer -> vertex -> f32[D_l]
-    face_data:  Vec<Array3<f32>>,  // layer -> face -> f32[D_in, D_F]
-    continuous: Vec<bool>,         // layer -> is the function continuous?
+    /// Data for vertice & faces at each layer
+    layers: Vec<Layer>,
     edge_label: Vec<EdgeLabel>,    // edge -> label
 }
 
@@ -79,16 +78,19 @@ impl Regioncam {
     pub fn from_polygon(vertex_data: Array2<f32>) -> Self {
         let n = vertex_data.nrows();
         assert_eq!(vertex_data.ncols(), 2, "Expected two dimensional points");
-        Self {
-            partition: Partition::polygon(n),
-            vertex_data: vec![vertex_data],
-            face_data: vec![array![[
+        let layer = Layer {
+            vertex_data,
+            face_data: array![[
                 [1.0, 0.0],
                 [0.0, 1.0],
                 [0.0, 0.0],
-            ]]],
+            ]],
+            continuous: true,
+        };
+        Self {
+            partition: Partition::polygon(n),
             edge_label: vec![EdgeLabel::default(); n],
-            continuous: vec![true],
+            layers: vec![layer],
         }
     }
     /// Construct a partition with a single rectangle
@@ -137,25 +139,25 @@ impl Regioncam {
         self.partition.num_edges()
     }
     pub fn num_layers(&self) -> usize {
-        self.vertex_data.len()
+        self.layers.len()
     }
     pub fn last_layer(&self) -> usize {
         self.num_layers() - 1
     }
     pub fn activations(&self, layer: usize) -> ArrayView2<f32> {
-        self.vertex_data[layer].view()
+        self.layers[layer].vertex_data.view()
     }
     pub fn activations_last(&self) -> ArrayView2<f32> {
-        self.vertex_data.last().unwrap().view()
+        self.layers.last().unwrap().vertex_data.view()
     }
     pub fn inputs(&self) -> &Array2<f32> {
-        &self.vertex_data[0]
+        &self.layers[0].vertex_data
     }
     pub fn vertex_inputs(&self, vertex: Vertex) -> ArrayView1<f32> {
-        self.vertex_data[0].row(vertex.index())
+        self.layers[0].vertex_data.row(vertex.index())
     }
     pub fn face_activations_at(&self, layer: usize) -> ArrayView3<f32> {
-        self.face_data[layer].view()
+        self.layers[layer].face_data.view()
     }
     pub fn face_activations(&self) -> ArrayView3<f32> {
         self.face_activations_at(self.last_layer())
@@ -201,7 +203,7 @@ impl Regioncam {
         self.face_centroid_at(0, face)
     }
     pub fn face_activation_for(&self, layer: usize, face: Face, inputs: ArrayView1<f32>) -> Array1<f32> {
-        let face_data = self.face_data[layer].index_axis(Axis(0), face.index());
+        let face_data = self.layers[layer].face_data.index_axis(Axis(0), face.index());
         let inputs = concatenate![Axis(0), inputs, Array1::ones(1)];
         inputs.dot(&face_data)
     }
@@ -228,7 +230,7 @@ impl Regioncam {
     }
     pub fn vertex_data_for_face(&self, face: Face, layer: usize) -> Array2<f32> {
         let indices = Vec::from_iter(self.vertices_on_face(face).map(usize::from));
-        self.vertex_data[layer].select(Axis(0), &indices)
+        self.layers[layer].vertex_data.select(Axis(0), &indices)
     }
     pub fn halfedges_leaving_vertex(&self, vertex: Vertex) -> HalfedgesLeavingVertex<'_> {
         self.partition.halfedges_leaving_vertex(vertex)
@@ -240,14 +242,13 @@ impl Regioncam {
     fn check_invariants(&self) {
         // vectors have the right size
         self.partition.check_invariants();
-        assert!(self.vertex_data.len() > 0);
-        assert_eq!(self.vertex_data.len(), self.num_layers());
-        assert_eq!(self.face_data.len(), self.num_layers());
-        for (vertex_data, face_data) in self.vertex_data.iter().zip(&self.face_data) {
-            assert_eq!(vertex_data.len_of(Axis(0)), self.num_vertices());
-            assert_eq!(face_data.len_of(Axis(0)), self.num_faces());
-            assert_eq!(face_data.len_of(Axis(1)), 3);
-            assert_eq!(face_data.len_of(Axis(2)), vertex_data.len_of(Axis(1)));
+        assert!(self.layers.len() > 0);
+        assert_eq!(self.layers.len(), self.num_layers());
+        for layer in &self.layers {
+            assert_eq!(layer.vertex_data.len_of(Axis(0)), self.num_vertices());
+            assert_eq!(layer.face_data.len_of(Axis(0)), self.num_faces());
+            assert_eq!(layer.face_data.len_of(Axis(1)), 3);
+            assert_eq!(layer.face_data.len_of(Axis(2)), layer.vertex_data.len_of(Axis(1)));
         }
         assert_eq!(self.edge_label.len(), self.num_edges());
         self.check_face_outputs();
@@ -258,12 +259,12 @@ impl Regioncam {
         // this is only true for continuous layers, otherwise there are dicontinuities at edges and vertices
         for face in self.faces() {
             let indices = Vec::from_iter(self.vertices_on_face(face).map(usize::from));
-            let vertex_coords_in = self.vertex_data[0].select(Axis(0), &indices);
+            let vertex_coords_in = self.layers[0].vertex_data.select(Axis(0), &indices);
             let vertex_coords_in = concatenate![Axis(1), vertex_coords_in, Array2::ones((indices.len(), 1))];
-            for layer in 0..self.num_layers() {
-                if self.continuous[layer] {
-                    let vertex_coords_out = self.vertex_data[layer].select(Axis(0), &indices);
-                    let face_data = self.face_data[layer].index_axis(Axis(0), face.index());
+            for layer in &self.layers {
+                if layer.continuous {
+                    let vertex_coords_out = layer.vertex_data.select(Axis(0), &indices);
+                    let face_data = layer.face_data.index_axis(Axis(0), face.index());
                     let computed_coords_out = vertex_coords_in.dot(&face_data);
                     assert_abs_diff_eq!(&computed_coords_out, &vertex_coords_out, epsilon=1e-4);
                 }
@@ -288,8 +289,8 @@ impl Regioncam {
             // copy edge data
             self.edge_label.push(self.edge_label[edge.index()]);
             // compute new vertex data
-            for vertex_data in self.vertex_data.iter_mut() {
-                append_lerp(vertex_data, a.index(), b.index(), t);
+            for layer in self.layers.iter_mut() {
+                append_lerp(&mut layer.vertex_data, a.index(), b.index(), t);
             }
             (true, new_v)
         }
@@ -303,9 +304,9 @@ impl Regioncam {
         // add edge data
         self.edge_label.push(edge_label);
         // add face data
-        for face_data in self.face_data.iter_mut() {
-            let data = face_data.index_axis(Axis(0), face.index()).to_owned();
-            face_data.push(Axis(0), data.view()).unwrap();
+        for layer in self.layers.iter_mut() {
+            let data = layer.face_data.index_axis(Axis(0), face.index()).to_owned();
+            layer.face_data.push(Axis(0), data.view()).unwrap();
         }
         (new_edge, new_face)
     }
@@ -334,8 +335,8 @@ impl Regioncam {
 
     // Remove data for a face that is not being used
     fn swap_remove_face_data(&mut self, face: Face) {
-        for data in self.face_data.iter_mut() {
-            swap_remove_row(data, face.index());
+        for layer in self.layers.iter_mut() {
+            swap_remove_row(&mut layer.face_data, face.index());
         }
     }
 
@@ -396,13 +397,13 @@ impl Regioncam {
             }
             impl EdgeSplitter for ZeroSplitter {
                 fn split_point(&self, rc: &Regioncam, a: Vertex, b: Vertex) -> Option<f32> {
-                    let acts = &rc.vertex_data[self.layer];
+                    let acts = &rc.layers[self.layer].vertex_data;
                     find_zero(acts[(a.index(), self.dim)], acts[(b.index(), self.dim)])
                 }
                 fn apply_split(&mut self, rc: &mut Regioncam, new_vertex: Vertex, _point: f32) {
                     // make sure that new vertices are actually 0 in dimension dim
                     // this may not be true exactly because of rounding errors.
-                    let acts = &mut rc.vertex_data[self.layer];
+                    let acts = &mut rc.layers[self.layer].vertex_data;
                     acts[(new_vertex.index(), self.dim)] = 0.0;
                 }
             }
@@ -473,11 +474,11 @@ impl Regioncam {
             impl EdgeSplitter for MaxSplitter {
                 fn split_point(&self, rc: &Regioncam, a: Vertex, b: Vertex) -> Option<f32> {
                     // split by zeros of (acts[:,dim] - max_so_far)
-                    let acts = &rc.vertex_data[self.layer];
+                    let acts = &rc.layers[self.layer].vertex_data;
                     find_zero(acts[(a.index(), self.dim)] - self.max_so_far[a.index()], acts[(b.index(), self.dim)] - self.max_so_far[b.index()])
                 }
                 fn apply_split(&mut self, rc: &mut Regioncam, new_vertex: Vertex, _t: f32) {
-                    let acts = &mut rc.vertex_data[self.layer];
+                    let acts = &mut rc.layers[self.layer].vertex_data;
                     self.max_so_far.push(acts[(new_vertex.index(), self.dim)]);
                 }
             }
@@ -569,15 +570,14 @@ impl Regioncam {
         // Split faces
         self.split_by_zero_at(layer);
         // Compute relu output for vertices
-        let acts = self.vertex_data[layer].view();
-        let new_vertex_data = relu(&acts);
-        self.vertex_data.push(new_vertex_data);
+        let input_layer = &self.layers[layer];
+        let vertex_data = relu(&input_layer.vertex_data.view());
         // Apply mask to compute per-face activation
         let face_mask = self.non_negative_face_mask(layer);
-        let mut face_data = self.face_data[layer].clone();
+        let mut face_data = input_layer.face_data.clone();
         face_data.zip_mut_with(&face_mask.slice(s![.., NewAxis, ..]), |x, m| if !m { *x = 0.0; });
-        self.face_data.push(face_data);
-        self.continuous.push(self.continuous[layer]);
+        // Add layer
+        self.layers.push(Layer{ vertex_data, face_data, continuous: input_layer.continuous });
         self.last_layer()
     }
     /// Update partition by adding a ReLU layer
@@ -592,12 +592,13 @@ impl Regioncam {
         self.split_by_zero_at(layer);
         let face_mask = self.non_negative_face_mask(layer);
         // Compute leaky relu output for vertices
-        self.vertex_data.push(leaky_relu(&self.vertex_data[layer].view(), negative_slope));
+        let input_layer = &self.layers[layer];
+        let vertex_data = leaky_relu(&input_layer.vertex_data.view(), negative_slope);
         // Apply mask to compute per-face activation
-        let mut face_data = self.face_data[layer].clone();
+        let mut face_data = input_layer.face_data.clone();
         face_data.zip_mut_with(&face_mask.slice(s![.., NewAxis, ..]), |x, m| if !m { *x *= negative_slope; });
-        self.face_data.push(face_data);
-        self.continuous.push(self.continuous[layer]);
+        // Add layer
+        self.layers.push(Layer{ vertex_data, face_data, continuous: input_layer.continuous });
         self.last_layer()
     }
     pub fn leaky_relu(&mut self, negative_slope: f32) {
@@ -607,12 +608,13 @@ impl Regioncam {
     pub fn max_pool_at(&mut self, layer: LayerNr) -> LayerNr {
         let (max, face_argmax) = self.split_by_argmax_at(layer);
         // New face data takes the given dim
-        let face_data = &self.face_data[layer];
-        let face_data = select_in_rows(Axis(2), &face_data.view(), face_argmax);
-        self.face_data.push(face_data.insert_axis(Axis(2)));
+        let input_layer = &self.layers[layer];
+        let face_data = select_in_rows(Axis(2), &input_layer.face_data.view(), face_argmax);
+        let face_data = face_data.insert_axis(Axis(2));
         // New vertex data is just the max value
-        self.vertex_data.push(max.insert_axis(Axis(1)));
-        self.continuous.push(self.continuous[layer]);
+        let vertex_data = max.insert_axis(Axis(1));
+        // Add layer
+        self.layers.push(Layer{ vertex_data, face_data, continuous: input_layer.continuous });
         self.last_layer()
     }
     pub fn max_pool(&mut self) {
@@ -626,12 +628,13 @@ impl Regioncam {
             Array::zeros((self.num_faces(), 2)),
             face_argmax.insert_axis(Axis(1)).mapv(|x| x as f32)
         ];
-        self.face_data.push(face_data.insert_axis(Axis(2)));
+        let face_data = face_data.insert_axis(Axis(2));
         // New vertex data is just the max value
         let acts = self.activations(layer);
         let vertex_argmax = Array::from_iter(acts.rows().into_iter().map(|row| argmax(row) as f32));
-        self.vertex_data.push(vertex_argmax.insert_axis(Axis(1)));
-        self.continuous.push(false);
+        let vertex_data =vertex_argmax.insert_axis(Axis(1));
+        // Add layer
+        self.layers.push(Layer{ vertex_data, face_data, continuous: false });
         self.last_layer()
     }
     pub fn argmax_pool(&mut self) {
@@ -642,17 +645,16 @@ impl Regioncam {
         // Split faces
         self.split_by_zero_at(layer);
         // Compute relu output for vertices
-        let acts = self.vertex_data[layer].view();
-        let new_vertex_data = acts.mapv(|x| if x >= 0.0 { 1.0 } else { 0.0 });
-        self.vertex_data.push(new_vertex_data);
+        let input_layer = &self.layers[layer];
+        let vertex_data = input_layer.vertex_data.mapv(|x| if x >= 0.0 { 1.0 } else { 0.0 });
         // Apply mask to compute per-face activation
         let face_mask = self.non_negative_face_mask(layer);
         let face_data = concatenate![Axis(1),
             Array::zeros((face_mask.len_of(Axis(0)), 2, face_mask.len_of(Axis(1)))),
             face_mask.insert_axis(Axis(1)).mapv(|x| if x { 1.0 } else {0.0})
         ];
-        self.face_data.push(face_data);
-        self.continuous.push(false);
+        // Add layer
+        self.layers.push(Layer{ vertex_data, face_data, continuous: false });
         self.last_layer()
     }
     pub fn sign(&mut self) {
@@ -661,7 +663,7 @@ impl Regioncam {
     
     /// Append a classification layer: with 1 output a sign based classifier, with >1 outputs an argmax
     pub fn decision_boundary_at(&mut self, layer: LayerNr) -> LayerNr {
-        if self.vertex_data[layer].ncols() == 1 {
+        if self.layers[layer].vertex_data.ncols() == 1 {
             self.sign_at(layer)
         } else {
             self.argmax_pool_at(layer)
@@ -676,22 +678,22 @@ impl Regioncam {
     /// Then `add_bias` should add the bias term
     pub fn generalized_linear_at(&mut self, layer: LayerNr, fun: impl Fn(ArrayView2<f32>) -> Array2<f32>, add_bias: impl Fn(ArrayViewMut2<f32>)) -> LayerNr {
         // Compute vertex data (x' = x*w + b)
-        let mut vertex_data = fun(self.vertex_data[layer].view());
+        let input_layer = &self.layers[layer];
+        let mut vertex_data = fun(input_layer.vertex_data.view());
         add_bias(vertex_data.view_mut());
-        self.vertex_data.push(vertex_data);
         // Compute new face_data:
         // If old was x = p*u + v,
         //  new is x' = x*w + b = p*(u*w) + (v*w + b)
         // Where v is face_data[..,2,..]
-        let face_data = &self.face_data[layer];
+        let face_data = &input_layer.face_data;
         let (a,b,c) = face_data.dim();
         let face_data2 = face_data.to_shape((a*b, c)).unwrap();
         let new_face_data = fun(face_data2.view());
         let (_,d) = new_face_data.dim();
         let mut new_face_data = new_face_data.into_shape_with_order((a,b,d)).unwrap();
         add_bias(new_face_data.index_axis_mut(Axis(1), 2));
-        self.face_data.push(new_face_data);
-        self.continuous.push(self.continuous[layer]);
+        // Add layer
+        self.layers.push(Layer{ vertex_data, face_data: new_face_data, continuous: input_layer.continuous });
         self.last_layer()
     }
 
@@ -708,9 +710,13 @@ impl Regioncam {
 
     /// Append a layer that adds the output of two existing layers
     pub fn sum(&mut self, layer1: LayerNr, layer2: LayerNr) -> LayerNr {
-        self.vertex_data.push(&self.vertex_data[layer1] +&self.vertex_data[layer2]);
-        self.face_data.push(&self.face_data[layer1] + &self.face_data[layer2]);
-        self.continuous.push(self.continuous[layer1] && self.continuous[layer2]);
+        let layer1 = &self.layers[layer1];
+        let layer2 = &self.layers[layer2];
+        self.layers.push(Layer {
+            vertex_data: &layer1.vertex_data + &layer2.vertex_data,
+            face_data: &layer1.face_data + &layer2.face_data,
+            continuous: layer1.continuous && layer2.continuous,
+        });
         self.last_layer()
     }
     /// Append a layer that adds an earlier layer to the output
