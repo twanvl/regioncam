@@ -584,6 +584,13 @@ impl Partition {
             todo!("This needs a way to get incident halfedges");
         }
     }
+
+    /// Remove a face by swapping it with the last face (as in Vec::swap_remove)
+    /// Detaches all halfedges from that face
+    pub fn swap_remove_face(&mut self, face: Face) {
+        self.assign_halfedge_in_loop_to_face(self.halfedge_on_face(face), OptFace::NONE);
+        self.unchecked_remove_face(face);
+    }
 }
 
 /// Iterator for all halfedges that form a face
