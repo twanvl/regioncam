@@ -438,6 +438,23 @@ mod regioncam {
             let rc = self.rc.borrow(py);
             self.activations(py, rc.regioncam.last_layer())
         }
+        /// Is this vertex on the outer boundary of the regioncam?
+        #[getter]
+        fn on_image_boundary<'py>(&self, py: Python<'py>) -> bool {
+            let rc: PyRef<'_, PyRegioncam> = self.rc.borrow(py);
+            rc.regioncam.halfedges_leaving_vertex(self.vertex).any(
+                |he| rc.regioncam.is_boundary(he.edge())
+            )
+        }
+        /// Is this vertex on the decision boundary?
+        #[getter]
+        fn on_decision_boundary<'py>(&self, py: Python<'py>) -> bool {
+            let rc: PyRef<'_, PyRegioncam> = self.rc.borrow(py);
+            let decision_boundary_layer = rc.regioncam.last_layer();
+            rc.regioncam.halfedges_leaving_vertex(self.vertex).any(
+                |he| rc.regioncam.edge_label(he.edge()).layer == decision_boundary_layer
+            )
+        }
         fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
             visit.call(&self.rc)
         }
@@ -472,9 +489,26 @@ mod regioncam {
              faces.1.map(|face| PyFace{ rc: self.rc.clone_ref(py), face })]
         }
         #[getter]
-        fn is_boundary<'py>(&self, py: Python<'py>) -> bool {
+        fn is_image_boundary<'py>(&self, py: Python<'py>) -> bool {
             let rc: PyRef<'_, PyRegioncam> = self.rc.borrow(py);
             rc.regioncam.is_boundary(self.edge)
+        }
+        #[getter]
+        fn is_decision_boundary<'py>(&self, py: Python<'py>) -> bool {
+            let rc: PyRef<'_, PyRegioncam> = self.rc.borrow(py);
+            let decision_boundary_layer = rc.regioncam.last_layer();
+            rc.regioncam.edge_label(self.edge).layer == decision_boundary_layer
+        }
+        /// In which layer was this edge added?
+        #[getter]
+        fn layer_nr<'py>(&self, py: Python<'py>) -> usize {
+            let rc: PyRef<'_, PyRegioncam> = self.rc.borrow(py);
+            rc.regioncam.edge_label(self.edge).layer
+        }
+        #[getter]
+        fn layer<'py>(&self, py: Python<'py>) -> PyLayer {
+            let layer = self.layer_nr(py);
+            PyLayer{ rc: self.rc.clone_ref(py), layer }
         }
         fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
             visit.call(&self.rc)
