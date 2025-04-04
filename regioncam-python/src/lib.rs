@@ -592,6 +592,11 @@ mod regioncam {
             let plane = Plane::through_points(&points.readonly().as_array());
             PyPlane(plane)
         }
+        #[staticmethod]
+        fn from_linear<'py>(#[pyo3(from_py_with="downcast_array")] weight: Bound<'py, PyArray2<f32>>, #[pyo3(from_py_with="downcast_array")] bias: Bound<'py, PyArray1<f32>>) -> Self {
+            let plane = Plane::from(::regioncam::nn::Linear{ weight: weight.to_owned_array(), bias: bias.to_owned_array() });
+            PyPlane(plane)
+        }
 
         fn forward<'py>(&self, #[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>) -> Bound<'py, PyArray2<f32>> {
             self.0.forward(&points.readonly().as_array()).to_pyarray(points.py())

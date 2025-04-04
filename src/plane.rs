@@ -1,4 +1,4 @@
-use ndarray::{stack, Array2, ArrayView2, Axis};
+use ndarray::{array, stack, Array2, ArrayView2, Axis};
 
 use crate::nn::{Linear, NNModule};
 use crate::util::*;
@@ -43,6 +43,12 @@ impl Plane {
     /// Size of square around the origin that contains the points generating the plane.
     pub fn size(&self) -> f32 {
         self.points.fold(0.0, |max, x| f32::max(max, x.abs()))
+    }
+}
+
+impl From<Linear> for Plane {
+    fn from(mapping: Linear) -> Self {
+        Plane { mapping, points: array![[]] }
     }
 }
 
