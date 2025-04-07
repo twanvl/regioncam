@@ -1,11 +1,12 @@
 // Utility functions
 
 use std::cmp::Ordering;
-use std::ops::Range;
+use std::ops::{Add, Mul, Range, Sub};
 
-use ndarray::{s, Array, Array1, ArrayBase, ArrayView, ArrayView1, ArrayView2, Axis, Data, Dimension, Ix1, Ix2, Ix3, RemoveAxis, Slice, SliceArg, SliceInfo, SliceInfoElem};
+use ndarray::{s, Array, Array1, ArrayBase, ArrayView, ArrayView1, ArrayView2, Axis, Data, Dimension, Ix0, Ix1, Ix2, Ix3, RemoveAxis, Slice, SliceArg, SliceInfo, SliceInfoElem};
 use num_traits::Zero;
 
+/// Rectified linear activation function
 pub fn relu<D: Dimension>(arr: &ArrayView<f32, D>) -> Array<f32, D> {
     arr.mapv(|x| x.max(0.0))
 }
@@ -29,6 +30,7 @@ pub(crate) fn histogram(values: &[usize], len: usize) -> Vec<usize> {
 
 pub(crate) const EMPTY_RANGE: Range<f32> = f32::INFINITY..f32::NEG_INFINITY;
 
+/// Extend the range to contain the point x.
 #[inline]
 pub(crate) fn minmax(mut range: Range<f32>, x: f32) -> Range<f32> {
     range.start = f32::min(range.start, x);
@@ -36,22 +38,24 @@ pub(crate) fn minmax(mut range: Range<f32>, x: f32) -> Range<f32> {
     range
 }
 
+/// Compute a bounding box from a set of points (rows of the array)
 pub fn bounding_box(arr: &ArrayView2<f32>) -> Array1<Range<f32>> {
     arr.fold_axis(Axis(0), EMPTY_RANGE, |r,x| minmax(r.clone(), *x))
 }
 
-// norm of a vector
+/// Norm of a vector
 pub fn norm<D: Dimension, S: Data<Elem=f32>>(arr: &ArrayBase<S, D>) -> f32 {
     arr.fold(0., |sum, x| sum + x * x).sqrt()
 }
 
+/// Normalize an owned vector
 pub fn into_normalized<D: Dimension>(arr: Array<f32, D>) -> Array<f32, D> {
     let norm = norm(&arr);
     arr.mapv_into(|x| x / norm)
 }
 
 /// For each row, select the given element in axis
-pub(crate) fn select_in_rows<T, D>(axis: Axis, arr: &ArrayView<T, D>, idxs: Array1<usize>) -> Array<T, D::Smaller>
+pub(crate) fn select_in_rows<T, D>(axis: Axis, arr: &ArrayView<T, D>, idxs: &Array1<usize>) -> Array<T, D::Smaller>
     where
     T: Clone + Zero + std::fmt::Display,
     D: Dimension + RemoveAxis,
@@ -59,7 +63,7 @@ pub(crate) fn select_in_rows<T, D>(axis: Axis, arr: &ArrayView<T, D>, idxs: Arra
 {
     let mut out = Array::zeros(arr.raw_dim().remove_axis(axis));
     for ((mut out_row, in_row), idx) in out.axis_iter_mut(Axis(0)).zip(arr.axis_iter(Axis(0))).zip(idxs) {
-        out_row.assign(&in_row.index_axis(Axis(axis.0-1), idx));
+        out_row.assign(&in_row.index_axis(Axis(axis.0-1), *idx));
     }
     out
 }
@@ -73,6 +77,13 @@ pub(crate) fn pop_array<T, D: Dimension>(axis: Axis, arr: &mut Array<T, D>) {
 pub(crate) trait SliceArg0 where Self: Dimension {
     type Arg: SliceArg<Self>;
     fn slice_arg_axis_0(i: usize) -> Self::Arg;
+}
+impl SliceArg0 for Ix1 {
+    type Arg = SliceInfo<[SliceInfoElem; 1], Ix1, Ix0>;
+
+    fn slice_arg_axis_0(i: usize) -> Self::Arg {
+        s![i]
+    }
 }
 impl SliceArg0 for Ix2 {
     type Arg = SliceInfo<[SliceInfoElem; 2], Ix2, Ix1>;
@@ -89,7 +100,7 @@ impl SliceArg0 for Ix3 {
     }
 }
 
-/// Copy a row/slice in a multidimensional array:
+/// Copy a row/slice in a multidimensional array. Equivalent to:
 /// arr[tgt] = arr[src]
 pub(crate) fn assign_row<T: Clone, D: Dimension + SliceArg0>(arr: &mut Array<T, D>, tgt: usize, src: usize) {
     let tgt_slice = <D as SliceArg0>::slice_arg_axis_0(tgt);
@@ -105,4 +116,45 @@ pub(crate) fn swap_remove_row<T: Clone, D: Dimension + SliceArg0>(arr: &mut Arra
         assign_row(arr, i, last);
     }
     pop_array(Axis(0), arr);
+}
+
+/// Linear interpolation
+pub fn lerp<A>(a: A, b: A, t: f32) -> <A as Add<<f32 as Mul<<A as Sub>::Output>>::Output>>::Output
+    where
+        A: Copy + Sub,
+        f32: Mul<<A as Sub>::Output>,
+        A: Add<<f32 as Mul<<A as Sub>::Output>>::Output>
+{
+    a + t * (b - a)
+}
+
+/// Append the row
+///   lerp(arr[i], arr[j], t) = arr[i] + t * (arr[j] - arr[i])
+/// to the array
+pub(crate) fn append_lerp<D: Dimension + RemoveAxis>(arr: &mut Array<f32, D>, i: usize, j: usize, t: f32) {
+    let ai = arr.index_axis(Axis(0), i);
+    let aj = arr.index_axis(Axis(0), j);
+    let ak = lerp(&ai, &aj, t);
+    arr.push(Axis(0), ak.view()).unwrap();
+}
+
+/// Append the row arr[i] to the array
+pub(crate) fn append_row<T: Clone, D: Dimension + RemoveAxis>(arr: &mut Array<T, D>, i: usize) {
+    let ai = arr.index_axis(Axis(0), i).to_owned();
+    arr.push(Axis(0), ai.view()).unwrap();
+}
+
+/// Find the point t between 0.0 and 1.0 at which lerp(a,b,t) == a+t*(b-a) == 0
+pub fn find_zero(a: f32, b: f32) -> Option<f32> {
+    if (a < 0.0) == (b < 0.0) {
+        None
+    } else if a == 0.0 {
+        Some(0.0)
+    } else if b == 0.0 {
+        Some(1.0)
+    } else {
+        let t = -a / (b - a);
+        debug_assert!(t >= 0.0 && t <= 1.0);
+        Some(t)
+    }
 }
