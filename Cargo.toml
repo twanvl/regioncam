@@ -6,7 +6,7 @@ authors.workspace = true
 description.workspace = true
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Twan van Laarhoven <twanvl@gmail.com>"]
 description = "Visualize linear regions in neural networks"
 
@@ -20,7 +20,6 @@ name = "regioncam"
 
 [dependencies]
 approx = "0.5.1"
-colorgrad = "0.7.0"
 ndarray = { version = "0.16.1", features = ["approx"] }
 num-traits = "0.2.19"
 rand = { version = "0.8.5", features = ["small_rng"] }

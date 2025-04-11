@@ -1,5 +1,6 @@
 
 use std::fmt::Debug;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use ndarray::{array, concatenate, s, Array, Array1, Array2, Array3, ArrayView1, ArrayView2, ArrayViewMut2, Axis, NewAxis};
 use approx::assert_abs_diff_eq;
 
@@ -9,7 +10,7 @@ use crate::plane::*;
 use crate::nn::NNModule;
 
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct EdgeLabel {
     /// Layer on which this edge was introduced
     pub layer: usize,
@@ -29,13 +30,9 @@ enum LayerType {
     MaxPool { face_argmax: Array1<usize> },
 }
 
-impl LayerType {
-    
-}
-
 /// All data for a layer
 #[derive(Debug, Clone, PartialEq)]
-struct Layer {
+pub struct Layer {
     vertex_data: Array2<f32>, // vertex -> f32[D_l]
     face_data: Array3<f32>,   // face -> f32[D_in, D_F]
     continuous: bool,         // is the function continuous at this layer?
@@ -44,11 +41,31 @@ struct Layer {
 }
 
 impl Layer {
-    fn vertices(&self) -> &Array2<f32> {
+    pub fn vertices(&self) -> &Array2<f32> {
         &self.vertex_data
     }
-    fn faces(&self) -> &Array3<f32> {
+    pub fn faces(&self) -> &Array3<f32> {
         &self.face_data
+    }
+    pub fn has_activations(&self) -> bool {
+        match self.layer_type {
+            LayerType::Input => false,
+            LayerType::Linear => false,
+            LayerType::ReLU {..} => true,
+            LayerType::MaxPool {..} => true,
+        }
+    }
+    fn hash_face(&self, face: Face, hasher: &mut impl Hasher) {
+        match &self.layer_type {
+            LayerType::Input => (),
+            LayerType::Linear => (),
+            LayerType::ReLU { face_mask } => {
+                face_mask.index_axis(Axis(0), face.index()).hash(hasher);
+            },
+            LayerType::MaxPool { face_argmax } => {
+                face_argmax.index_axis(Axis(0), face.index()).hash(hasher);
+            },
+        }
     }
     /// Append a copy of the given face
     fn append_face(&mut self, face: Face) {
@@ -231,6 +248,24 @@ impl Regioncam {
         let face_data = self.layers[layer].face_data.index_axis(Axis(0), face.index());
         let inputs = concatenate![Axis(0), inputs, Array1::ones(1)];
         inputs.dot(&face_data)
+    }
+    /// Compute a hash code for a given face
+    /// The hash code is based only on activations, so it is stable to recreating the partition
+    pub fn face_hash(&self, face: Face) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        for layer in &self.layers {
+            layer.hash_face(face, &mut hasher);
+        }
+        hasher.finish()
+    }
+    pub fn face_hash_at(&self, layer: usize, face: Face) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        layer.hash(&mut hasher);
+        self.layers[layer].hash_face(face, &mut hasher);
+        hasher.finish()
+    }
+    pub fn layer(&self, layer: usize) -> &Layer {
+        &self.layers[layer]
     }
 
     // Iterators

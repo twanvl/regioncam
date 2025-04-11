@@ -10,7 +10,7 @@ type Index = u32;
 /// Declare a type to be used for indexes
 macro_rules! declare_index_type {
     ($vis:vis $ty:ident) => {
-        #[derive(Copy, Clone, PartialEq, Eq)]
+        #[derive(Copy, Clone, PartialEq, Eq, Hash)]
         $vis struct $ty(Index);
 
         impl $ty {

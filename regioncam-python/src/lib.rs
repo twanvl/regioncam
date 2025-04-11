@@ -918,8 +918,16 @@ mod regioncam {
                     }
                 } else if k == "point_size" || k == "marker_size" {
                     opts.point_size = v.extract()?;
-                } else if k == "label_size" || k == "text_size" {
-                    opts.label_size = v.extract()?;
+                } else if k == "label_size" || k == "text_size" || k == "font_size" {
+                    opts.font_size = v.extract()?;
+                } else if k == "color_edges" || k == "line_color_amount" {
+                    opts.line_color_amount = v.extract()?;
+                } else if k == "line_color_by_layer" {
+                    opts.line_color_by_layer = v.extract()?;
+                } else if k == "line_color_by_neuron" {
+                    opts.line_color_by_neuron = v.extract()?;
+                } else if k == "face_color_by_layer" {
+                    opts.face_color_by_layer = v.extract()?;
                 } else {
                     return Err(PyValueError::new_err(format!("Unexpected argument: '{k}'")));
                 }
