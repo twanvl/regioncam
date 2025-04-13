@@ -25,6 +25,7 @@ pub struct SvgOptions {
     pub line_color_by_neuron: bool,
     pub line_color_amount: f32,
     pub layer_line_colors: Vec<ColorF32>, // by layer
+    pub point_color: ColorF32,
     pub point_size: f32,
     pub font_size: f32,
 }
@@ -45,6 +46,7 @@ impl Default for SvgOptions {
             line_color_by_neuron: false,
             line_color_amount: 0.333,
             layer_line_colors: default_layer_line_colors(),
+            point_color: ColorF32::new(0.0, 0.0, 0.0),
             point_size: 8.0,
             font_size: 16.0,
         }
@@ -77,7 +79,7 @@ impl SvgOptions {
 pub struct MarkedPoint {
     pub position: [f32;2],
     pub label: String,
-    //pub color: Color,
+    pub color: Option<ColorF32>,
 }
 
 /// Helper struct for writing a Partition to an svg file
@@ -152,13 +154,14 @@ impl<'a> SvgWriter<'a> {
         for point in self.points {
             let (x, y) = self.point_coord(point.position.as_ref().into());
             let radius = self.options.point_size * 0.5;
+            let color = point.color.unwrap_or(self.options.point_color).into();
             if radius > 0.0 {
                 let circle = Circle { x, y, radius, style: Style::default(), comment: None };
-                let circle = circle.fill(black());
+                let circle = circle.fill(color);
                 writeln!(w, "{}", circle)?;
             }
             if !point.label.is_empty() && self.options.font_size > 0.0 {
-                writeln!(w, "{}", text(x + radius, y - radius, &point.label).size(self.options.font_size))?;
+                writeln!(w, "{}", text(x + radius, y - radius, &point.label).size(self.options.font_size).color(color))?;
             }
         }
         Ok(())

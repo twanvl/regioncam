@@ -54,7 +54,8 @@ mod regioncam {
             let marked_points = plane.points.rows().into_iter().zip(labels.into_iter()).map(
                     |(point,label)| {
                         let position = point.as_slice().unwrap().try_into().unwrap();
-                        MarkedPoint { position, label }
+                        let color = None;
+                        MarkedPoint { position, label, color }
                     }
                 ).collect();
             let plane = Py::new(points.py(), PyPlane(plane))?;
@@ -81,7 +82,8 @@ mod regioncam {
             self.marked_points.extend(points.rows().into_iter().zip(labels.into_iter()).map(
                     |(point,label)| {
                         let position = point.as_slice().unwrap().try_into().unwrap();
-                        MarkedPoint { position, label }
+                        let color = None;
+                        MarkedPoint { position, label, color }
                     }
                 ));
             Ok(())
