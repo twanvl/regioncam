@@ -928,11 +928,45 @@ mod regioncam {
                     opts.line_color_by_neuron = v.extract()?;
                 } else if k == "face_color_by_layer" {
                     opts.face_color_by_layer = v.extract()?;
+                } else if k == "line_color" {
+                    opts.line_color = extract_color(&v)?;
+                } else if k == "line_color_decision_boundary" || k == "decision_boundary_color" {
+                    opts.line_color = extract_color(&v)?;
+                } else if k == "layer_line_colors" || k == "line_colors" {
+                    opts.layer_line_colors = extract_colors(&v)?;
+                    opts.line_color_by_layer = true;
                 } else {
                     return Err(PyValueError::new_err(format!("Unexpected argument: '{k}'")));
                 }
             }
         }
         Ok(opts)
+    }
+    
+    fn extract_colors<'py>(arg: &Bound<'py, PyAny>) -> PyResult<Vec<ColorF32>> {
+        let list = arg.extract::<Vec<Bound<'py, PyAny>>>()?;
+        list.iter().map(extract_color).collect()
+    }
+    fn extract_color<'py>(arg: &Bound<'py, PyAny>) -> PyResult<ColorF32> {
+        if let Ok((r, g, b)) = arg.extract() {
+            Ok(ColorF32::new(r, g, b))
+        } else if let Some(color) = arg.extract().ok().and_then(|s: String| named_color(&s)) {
+            Ok(color)
+        } else {
+            Err(DowncastError::new(arg, "Tuple[Float,Float,Float] | String").into())
+        }
+    }
+    fn named_color(name: &str) -> Option<ColorF32> {
+        match name {
+            "black"   => Some(ColorF32::new(0.0, 0.0, 0.0)),
+            "red"     => Some(ColorF32::new(1.0, 0.0, 0.0)),
+            "green"   => Some(ColorF32::new(0.0, 1.0, 0.0)),
+            "blue"    => Some(ColorF32::new(0.0, 0.0, 1.0)),
+            "yellow"  => Some(ColorF32::new(1.0, 1.0, 0.0)),
+            "magenta" => Some(ColorF32::new(1.0, 0.0, 1.0)),
+            "cyan"    => Some(ColorF32::new(0.0, 1.0, 1.0)),
+            "white"   => Some(ColorF32::new(1.0, 1.0, 1.0)),
+            _ => None,
+        }
     }
 }

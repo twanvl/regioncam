@@ -19,11 +19,12 @@ pub struct SvgOptions {
     pub face_color_by_layer: bool,
     pub line_width: f32,
     pub line_width_decision_boundary: f32,
-    pub line_color: Color,
-    pub line_color_decision_boundary: Color,
+    pub line_color: ColorF32,
+    pub line_color_decision_boundary: ColorF32,
     pub line_color_by_layer: bool,
     pub line_color_by_neuron: bool,
     pub line_color_amount: f32,
+    pub layer_line_colors: Vec<ColorF32>, // by layer
     pub point_size: f32,
     pub font_size: f32,
 }
@@ -38,15 +39,28 @@ impl Default for SvgOptions {
             face_color_by_layer: true,
             line_width: 0.8,
             line_width_decision_boundary: 1.6,
-            line_color: black(),
-            line_color_decision_boundary: red(),
+            line_color: ColorF32::new(0.0, 0.0, 0.0),
+            line_color_decision_boundary: ColorF32::new(1.0, 0.0, 0.0),
             line_color_by_layer: true,
             line_color_by_neuron: false,
             line_color_amount: 0.333,
+            layer_line_colors: default_layer_line_colors(),
             point_size: 8.0,
             font_size: 16.0,
         }
     }
+}
+
+fn default_layer_line_colors() -> Vec<ColorF32> {
+    vec![
+        ColorF32::new(0.0, 0.0, 0.0),
+        ColorF32::new(0.3, 1.0, 0.0),
+        ColorF32::new(0.0, 0.5, 1.0),
+        ColorF32::new(1.0, 0.0, 0.8),
+        ColorF32::new(1.0, 0.8, 0.0),
+        ColorF32::new(0.0, 1.0, 0.5),
+        ColorF32::new(1.0, 1.0, 1.0),
+    ]
 }
 
 impl SvgOptions {
@@ -198,21 +212,25 @@ impl<'a> SvgWriter<'a> {
             } else {
                 (self.options.line_color, self.options.line_width)
             };
-            if self.options.line_color_by_neuron || self.options.line_color_by_layer {
+            if self.options.line_color_by_layer && !self.options.line_color_by_neuron && label.layer < self.options.layer_line_colors.len() {
+                let mix_color = self.options.layer_line_colors[label.layer];
+                let color = ColorF32::lerp(color.into(), mix_color, self.options.line_color_amount);
+                Some((color.into(), width))
+            } else if self.options.line_color_by_neuron || self.options.line_color_by_layer {
                 // hash edge label or layer
                 let mut hasher = DefaultHasher::new();
                 if self.options.line_color_by_neuron {
-                    self.regioncam.edge_label(edge).hash(&mut hasher);
+                    label.hash(&mut hasher);
                 } else {
-                    self.regioncam.edge_label(edge).layer.hash(&mut hasher);
+                    label.layer.hash(&mut hasher);
                 };
                 let hash = hasher.finish();
                 // create a color for the edge label
                 let mix_color = ColorF32::from_hash(hash);
-                let color = ColorF32::lerp(color.into(), mix_color, self.options.line_color_amount).into();
-                Some((color, width))
+                let color = ColorF32::lerp(color.into(), mix_color, self.options.line_color_amount);
+                Some((color.into(), width))
             } else {
-                Some((color, width))
+                Some((color.into(), width))
             }
         } else {
             None
@@ -239,8 +257,8 @@ impl<'a> SvgWriter<'a> {
     }
 }
 
-#[derive(Clone, Debug)]
-struct ColorF32 {
+#[derive(Clone, Copy, Debug)]
+pub struct ColorF32 {
     r: f32,
     g: f32,
     b: f32,
@@ -263,45 +281,54 @@ impl From<Color> for ColorF32 {
         }
     }
 }
+impl From<(f32,f32,f32)> for ColorF32 {
+    fn from(value: (f32, f32, f32)) -> Self {
+        let (r, g, b) = value;
+        ColorF32::new(r, g, b)
+    }
+}
 impl ColorF32 {
-    fn from_fn(mut f: impl FnMut() -> f32) -> Self {
+    pub fn new(r: f32, g: f32, b: f32) -> Self {
+        ColorF32 { r, g, b }
+    }
+    pub fn white() -> Self {
+        Self::new(1.0, 1.0, 1.0)
+    }
+    pub fn from_fn(mut f: impl FnMut() -> f32) -> Self {
         ColorF32 {
             r: f(),
             g: f(),
             b: f(),
         }
     }
-    fn map(self, f: impl Fn(f32) -> f32) -> Self {
+    pub fn map(self, f: impl Fn(f32) -> f32) -> Self {
         ColorF32 {
             r: f(self.r),
             g: f(self.g),
             b: f(self.b),
         }
     }
-    fn zip(self, other: Self, f: impl Fn(f32, f32) -> f32) -> Self {
+    pub fn zip(self, other: Self, f: impl Fn(f32, f32) -> f32) -> Self {
         ColorF32 {
             r: f(self.r, other.r),
             g: f(self.g, other.g),
             b: f(self.b, other.b),
         }
     }
-    fn white() -> Self {
-        Self::from_fn(|| 1.0)
-    }
-    fn from_hash(hash: u64) -> Self {
+    pub fn from_hash(hash: u64) -> Self {
         let mut rng = SmallRng::seed_from_u64(hash);
         Self::random(0.0..1.0, &mut rng)
     }
-    fn random<R: Rng + ?Sized>(range: Range<f32>, rng: &mut R) -> Self {
+    pub fn random<R: Rng + ?Sized>(range: Range<f32>, rng: &mut R) -> Self {
         Self::from_fn(|| rng.gen_range(range.clone()))
     }
-    fn rescale(self, range: Range<f32>) -> Self {
+    pub fn rescale(self, range: Range<f32>) -> Self {
         Self::map(self, |x| point_in_range(x, &range))
     }
-    fn lerp(self, other: Self, t: f32) -> Self {
+    pub fn lerp(self, other: Self, t: f32) -> Self {
         Self::zip(self, other, |x, y| lerp(x, y, t))
     }
-    fn uniform_interpolate(self, other: Self, t: f32) -> Self {
+    pub fn uniform_interpolate(self, other: Self, t: f32) -> Self {
         Self::zip(self, other, |x, y| uniform_interpolate(x, y, t))
     }
 }
