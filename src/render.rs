@@ -13,6 +13,8 @@ use crate::util::*;
 pub struct RenderOptions {
     pub image_size: (f32,f32),
     pub draw_boundary: bool,
+    pub draw_faces: bool,
+    pub draw_edges: bool,
     pub face_color_range: Range<f32>,
     pub face_color_layer_amount: f32,
     pub face_color_by_layer: bool,
@@ -34,6 +36,8 @@ impl Default for RenderOptions {
         Self {
             image_size: (800.0, 800.0),
             draw_boundary: false,
+            draw_faces: true,
+            draw_edges: true,
             face_color_range: 0.666..1.0,
             face_color_layer_amount: 0.666,
             face_color_by_layer: true,
@@ -262,8 +266,12 @@ mod svg {
         /// Output to svg
         pub fn write_svg(&self, w: &mut dyn Write) -> std::io::Result<()> {
             self.write_header(w)?;
-            self.write_faces(w)?;
-            self.write_edges(w)?;
+            if self.options.draw_faces {
+                self.write_faces(w)?;
+            }
+            if self.options.draw_edges {
+                self.write_edges(w)?;
+            }
             self.write_points(w)?;
             self.write_footer(w)?;
             Ok(())
@@ -387,8 +395,12 @@ mod piet {
 
     impl<'a> Renderer<'a> {
         fn render(&self, ctx: &mut impl RenderContext) {
-            self.render_faces(ctx);
-            self.render_edges(ctx);
+            if self.options.draw_faces {
+                self.render_faces(ctx);
+            }
+            if self.options.draw_edges {
+                self.render_edges(ctx);
+            }
             self.render_points(ctx);
         }
 

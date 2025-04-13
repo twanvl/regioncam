@@ -243,12 +243,14 @@ mod regioncam {
         /// Parameters:
         ///  * size:           Width and height of the image in pixels
         ///                    Either a single number or a tuple of (width, height)
+        ///  * draw_boundary:  Draw edges on the region boundary? Default: false
+        ///  * draw_faces:     Draw regions by filling them with a random color? Default: true
+        ///  * draw_edges:     Draw edges between regions? Default: true
         ///  * line_width:     Line width to use for edges
         ///  * line_color:     Color to use for edges (except the decision boundary).
         ///                    Either a (r,g,b) tuple of numbers in range(0,1) or a string name
         ///  * line_color_decision_boundary:
         ///                    Color to use for decision boundary edges.
-        ///  * draw_boundary:  draw edges on the region boundary?
         ///  * line_width_decision_boundary:
         ///                    Line width for the decision boundary edges
         ///  * marker_size:    Circle diameter of marked points
@@ -966,10 +968,14 @@ mod regioncam {
                 let k = k.downcast::<PyString>()?.to_str()?;
                 if k == "line_width" {
                     opts.line_width = v.extract()?;
-                } else if k == "draw_boundary" {
-                    opts.draw_boundary = v.extract()?;
                 } else if k == "line_width_decision_boundary" || k == "decision_boundary_line_width" {
                     opts.line_width_decision_boundary = v.extract()?;
+                } else if k == "draw_boundary" {
+                    opts.draw_boundary = v.extract()?;
+                } else if k == "draw_faces" {
+                    opts.draw_faces = v.extract()?;
+                } else if k == "draw_edges" {
+                    opts.draw_edges = v.extract()?;
                 } else if k == "image_size" || k == "size" {
                     if let Ok(v) = v.downcast::<PyTuple>() {
                         opts.image_size = v.extract()?;
