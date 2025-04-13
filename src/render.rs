@@ -212,7 +212,7 @@ impl<'a> Renderer<'a> {
     fn face_color(&self, face: Face) -> Color {
         if self.options.face_color_by_layer {
             // Color based on face hash per layer
-            let mut color = Color::white();
+            let mut color = Color::new(0.5, 0.8, 1.0);
             let mut first = true;
             for layer in 0..self.regioncam.num_layers() {
                 if self.regioncam.layer(layer).has_activations() {
