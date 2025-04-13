@@ -386,8 +386,8 @@ impl Partition {
 
     /// Assign all halfedges in a loop starting at he to the given face
     fn assign_halfedge_in_loop_to_face(&mut self, mut he: Halfedge, face: OptFace) {
-        while self.he_face[he.index()] != face.into() {
-            self.he_face[he.index()] = face.into();
+        while self.he_face[he.index()] != face {
+            self.he_face[he.index()] = face;
             he = self.next(he);
         }
     }
