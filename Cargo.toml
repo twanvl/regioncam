@@ -18,13 +18,23 @@ members = [
 [lib]
 name = "regioncam"
 
+[features]
+default = ["svg","tiny-skia"]
+piet = ["dep:piet"]
+tiny-skia = ["piet", "dep:tiny-skia", "dep:piet-tiny-skia", "dep:png"]
+svg = ["dep:svg_fmt"]
+
 [dependencies]
 approx = "0.5.1"
 ndarray = { version = "0.16.1", features = ["approx"] }
 num-traits = "0.2.19"
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_distr = "0.4.3"
-svg_fmt = "0.4.4"
+svg_fmt = { version = "0.4.4", optional = true }
+piet = { version = "0.6.2", optional = true }
+piet-tiny-skia = { version = "0.2.3", optional = true }
+tiny-skia = { version = "0.11", optional = true }
+png = { version = "0.17", optional = true }
 
 [profile.release-with-debug]
 inherits = "release"

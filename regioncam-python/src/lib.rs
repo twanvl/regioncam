@@ -23,7 +23,7 @@ mod regioncam {
         regioncam: Regioncam,
         plane: Option<Py<PyPlane>>,
         // options to use for svg visualization
-        svg_options: SvgOptions,
+        render_options: RenderOptions,
         // points to include in visualizatoin
         marked_points: Vec<MarkedPoint>,
     }
@@ -37,12 +37,12 @@ mod regioncam {
         #[new]
         #[pyo3(signature=(size=1.0))]
         fn new(size: f32) -> Self {
-            Self { regioncam: Regioncam::square(size), plane: None, svg_options: SvgOptions::default(), marked_points: vec![] }
+            Self { regioncam: Regioncam::square(size), plane: None, render_options: RenderOptions::default(), marked_points: vec![] }
         }
         /// Create a Regioncam object with a circular region
         #[staticmethod]
         fn circle(radius: f32) -> Self {
-            Self { regioncam: Regioncam::circle(radius), plane: None, svg_options: SvgOptions::default(), marked_points: vec![] }
+            Self { regioncam: Regioncam::circle(radius), plane: None, render_options: RenderOptions::default(), marked_points: vec![] }
         }
         /// Create a Regioncam object for a plane through the given points.
         #[staticmethod]
@@ -59,7 +59,7 @@ mod regioncam {
                     }
                 ).collect();
             let plane = Py::new(points.py(), PyPlane(plane))?;
-            Ok(Self { regioncam, plane: Some(plane), svg_options: SvgOptions::default(), marked_points })
+            Ok(Self { regioncam, plane: Some(plane), render_options: RenderOptions::default(), marked_points })
         }
 
         /// Mark points in the input space.
@@ -185,34 +185,92 @@ mod regioncam {
         /// Visualize the regions, and write this to an svg file.
         ///
         /// Parameters:
-        ///  * path:        path of the file to write to
-        ///  * size:        width and height of the image in pixels
-        ///  * line_width:  line width to use for edges
+        ///  * path:              path of the file to write to
+        ///  * *format options*:  See set_format.
+        #[cfg(feature = "svg")]
         #[pyo3(signature=(path, **kwargs))]
         fn write_svg(&self, path: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
-            let svg_opts = parse_svg_options(&self.svg_options, kwargs)?;
             let mut file = File::create(path)?;
-            self.do_write_svg(svg_opts, &mut file)?;
-            Ok(())
+            self.render(kwargs, |renderer| {
+                renderer.write_svg(&mut file)?;
+                Ok(())
+            })
         }
 
-        /// Get an svg representation of the regions.
+        /// Visualize the regions, and write this to an png file.
         ///
         /// Parameters:
-        ///  * size:        width and height of the image in pixels
-        ///  * line_width:  line width to use for edges
-        #[pyo3(signature=(**kwargs))]
-        fn _repr_svg_(&self, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<String> {
-            let svg_opts = parse_svg_options(&self.svg_options, kwargs)?;
-            let mut out = vec![];
-            self.do_write_svg(svg_opts, &mut out)?;
-            Ok(String::from_utf8(out)?)
+        ///  * path:              path of the file to write to
+        ///  * *format options*:  See set_format.
+        #[cfg(feature = "png")]
+        #[pyo3(signature=(path, **kwargs))]
+        fn write_png(&self, path: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+            self.render(kwargs, |renderer| {
+                renderer.write_png(path).map_err(png_error_to_py_error)
+            })
         }
 
-        /// Set svg format options
+        /// Get an svg representation of the regions, as a string.
+        ///
+        /// Parameters:
+        ///  * *format options*:   See set_format.
+        #[cfg(feature = "svg")]
+        #[pyo3(signature=(**kwargs))]
+        fn svg(&self, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<String> {
+            let mut out = vec![];
+            self.render(kwargs, |renderer| {
+                renderer.write_svg(&mut out)?;
+                Ok(String::from_utf8(out)?)
+            })
+        }
+
+        #[cfg(feature = "repr_svg")]
+        #[pyo3(signature=(**kwargs))]
+        fn _repr_svg_(&self, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<String> {
+            self.svg(kwargs)
+        }
+
+        #[cfg(feature = "repr_png")]
+        #[pyo3(signature=(**kwargs))]
+        fn _repr_png_(&self, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Vec<u8>> {
+            self.render(kwargs, |renderer| {
+                renderer.encode_png().map_err(png_error_to_py_error)
+            })
+        }
+
+        /// Set rendering options
+        /// 
+        /// Parameters:
+        ///  * size:           Width and height of the image in pixels
+        ///                    Either a single number or a tuple of (width, height)
+        ///  * line_width:     Line width to use for edges
+        ///  * line_color:     Color to use for edges (except the decision boundary).
+        ///                    Either a (r,g,b) tuple of numbers in range(0,1) or a string name
+        ///  * line_color_decision_boundary:
+        ///                    Color to use for decision boundary edges.
+        ///  * draw_boundary:  draw edges on the region boundary?
+        ///  * line_width_decision_boundary:
+        ///                    Line width for the decision boundary edges
+        ///  * marker_size:    Circle diameter of marked points
+        ///  * font_size:      Font size for marked points
+        ///  * line_color_by_layer:
+        ///                    Use a different color for the edges from each layer.
+        ///                    Default: true
+        //   * line_color_by_neuron:
+        ///                    Use a different color for the edges from each neuron.
+        ///                    Default: true
+        ///  * line_color_amount:
+        ///                    How much to use the layer/neuron line color, as opposed to the base line_color.
+        ///                    Default: 0.333
+        ///  * layer_line_colors:
+        ///                    List of colors to use for each layer.
+        ///  * face_color_by_layer:
+        ///                    Determine face colors per layer, mixing with colors from earlier layers.
+        ///                    In particular has the effect of coloring regions by class label.
+        ///                    Default: true
         #[pyo3(signature=(**kwargs))]
         fn set_format(&mut self, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
-            self.svg_options = parse_svg_options(&self.svg_options, kwargs)?;
+            self.render_options = parse_render_options(&self.render_options, kwargs)?;
             Ok(())
         }
 
@@ -317,10 +375,11 @@ mod regioncam {
     }
 
     impl PyRegioncam {
-        fn do_write_svg(&self, svg_opts: SvgOptions, mut w: &mut dyn std::io::Write) -> std::io::Result<()> {
-            let mut writer = SvgWriter::new(&self.regioncam, &svg_opts);
-            writer.points = &self.marked_points;
-            writer.write_svg(&mut w)
+        /// Make a Renderer for rendering the regioncam to svg or png
+        fn render<T>(&self, kwargs: Option<&Bound<'_, PyDict>>, fun: impl FnOnce(Renderer<'_>) -> PyResult<T>) -> PyResult<T> {
+            let svg_opts = parse_render_options(&self.render_options, kwargs)?;
+            let renderer = Renderer::new(&self.regioncam, &svg_opts).with_points(&self.marked_points);
+            fun(renderer)
         }
 
         fn add_layer<'py>(&mut self, py: Python<'py>, module: &PyNNModule, input_layer: Option<usize>) -> PyResult<usize> {
@@ -900,7 +959,7 @@ mod regioncam {
         }
     }
     
-    fn parse_svg_options<'py>(opts: &SvgOptions, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<SvgOptions> {
+    fn parse_render_options<'py>(opts: &RenderOptions, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<RenderOptions> {
         let mut opts = opts.clone();
         if let Some(kwargs) = kwargs {
             for (k, v) in kwargs {
@@ -945,30 +1004,39 @@ mod regioncam {
         Ok(opts)
     }
     
-    fn extract_colors<'py>(arg: &Bound<'py, PyAny>) -> PyResult<Vec<ColorF32>> {
+    fn extract_colors<'py>(arg: &Bound<'py, PyAny>) -> PyResult<Vec<Color>> {
         let list = arg.extract::<Vec<Bound<'py, PyAny>>>()?;
         list.iter().map(extract_color).collect()
     }
-    fn extract_color<'py>(arg: &Bound<'py, PyAny>) -> PyResult<ColorF32> {
+    fn extract_color<'py>(arg: &Bound<'py, PyAny>) -> PyResult<Color> {
         if let Ok((r, g, b)) = arg.extract() {
-            Ok(ColorF32::new(r, g, b))
+            Ok(Color::new(r, g, b))
         } else if let Some(color) = arg.extract().ok().and_then(|s: String| named_color(&s)) {
             Ok(color)
         } else {
             Err(DowncastError::new(arg, "Tuple[Float,Float,Float] | String").into())
         }
     }
-    fn named_color(name: &str) -> Option<ColorF32> {
+    fn named_color(name: &str) -> Option<Color> {
         match name {
-            "black"   => Some(ColorF32::new(0.0, 0.0, 0.0)),
-            "red"     => Some(ColorF32::new(1.0, 0.0, 0.0)),
-            "green"   => Some(ColorF32::new(0.0, 1.0, 0.0)),
-            "blue"    => Some(ColorF32::new(0.0, 0.0, 1.0)),
-            "yellow"  => Some(ColorF32::new(1.0, 1.0, 0.0)),
-            "magenta" => Some(ColorF32::new(1.0, 0.0, 1.0)),
-            "cyan"    => Some(ColorF32::new(0.0, 1.0, 1.0)),
-            "white"   => Some(ColorF32::new(1.0, 1.0, 1.0)),
+            "black"   => Some(Color::new(0.0, 0.0, 0.0)),
+            "red"     => Some(Color::new(1.0, 0.0, 0.0)),
+            "green"   => Some(Color::new(0.0, 1.0, 0.0)),
+            "blue"    => Some(Color::new(0.0, 0.0, 1.0)),
+            "yellow"  => Some(Color::new(1.0, 1.0, 0.0)),
+            "magenta" => Some(Color::new(1.0, 0.0, 1.0)),
+            "cyan"    => Some(Color::new(0.0, 1.0, 1.0)),
+            "white"   => Some(Color::new(1.0, 1.0, 1.0)),
             _ => None,
+        }
+    }
+    
+    #[cfg(feature = "png")]
+    fn png_error_to_py_error(err: png::EncodingError) -> PyErr {
+        use pyo3::exceptions::PyException;
+        match err {
+            png::EncodingError::IoError(err) => err.into(),
+            _ => PyException::new_err(format!("{err}")),
         }
     }
 }
