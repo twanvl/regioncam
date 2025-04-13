@@ -246,6 +246,7 @@ mod regioncam {
         ///  * draw_boundary:  Draw edges on the region boundary? Default: false
         ///  * draw_faces:     Draw regions by filling them with a random color? Default: true
         ///  * draw_edges:     Draw edges between regions? Default: true
+        ///  * draw_vertices:  Draw verteices where edges meet? Default: false
         ///  * line_width:     Line width to use for edges
         ///  * line_color:     Color to use for edges (except the decision boundary).
         ///                    Either a (r,g,b) tuple of numbers in range(0,1) or a string name
@@ -972,10 +973,12 @@ mod regioncam {
                     opts.line_width_decision_boundary = v.extract()?;
                 } else if k == "draw_boundary" {
                     opts.draw_boundary = v.extract()?;
-                } else if k == "draw_faces" {
+                } else if k == "draw_faces" || k == "draw_regions" {
                     opts.draw_faces = v.extract()?;
                 } else if k == "draw_edges" {
                     opts.draw_edges = v.extract()?;
+                } else if k == "draw_vertices" {
+                    opts.draw_vertices = v.extract()?;
                 } else if k == "image_size" || k == "size" {
                     if let Ok(v) = v.downcast::<PyTuple>() {
                         opts.image_size = v.extract()?;
@@ -987,6 +990,8 @@ mod regioncam {
                     opts.point_size = v.extract()?;
                 } else if k == "label_size" || k == "text_size" || k == "font_size" {
                     opts.font_size = v.extract()?;
+                } else if k == "vertex_size" {
+                    opts.vertex_size = v.extract()?;
                 } else if k == "color_edges" || k == "line_color_amount" {
                     opts.line_color_amount = v.extract()?;
                 } else if k == "line_color_by_layer" {

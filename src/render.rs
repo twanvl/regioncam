@@ -15,6 +15,7 @@ pub struct RenderOptions {
     pub draw_boundary: bool,
     pub draw_faces: bool,
     pub draw_edges: bool,
+    pub draw_vertices: bool,
     pub face_color_range: Range<f32>,
     pub face_color_layer_amount: f32,
     pub face_color_by_layer: bool,
@@ -29,6 +30,7 @@ pub struct RenderOptions {
     pub point_color: Color,
     pub point_size: f32,
     pub font_size: f32,
+    pub vertex_size: f32,
 }
 
 impl Default for RenderOptions {
@@ -38,6 +40,7 @@ impl Default for RenderOptions {
             draw_boundary: false,
             draw_faces: true,
             draw_edges: true,
+            draw_vertices: false,
             face_color_range: 0.666..1.0,
             face_color_layer_amount: 0.666,
             face_color_by_layer: true,
@@ -52,6 +55,7 @@ impl Default for RenderOptions {
             point_color: Color::new(0.0, 0.0, 0.0),
             point_size: 8.0,
             font_size: 16.0,
+            vertex_size: 3.0,
         }
     }
 }
@@ -171,8 +175,11 @@ impl<'a> Renderer<'a> {
 
         // Adjust bounding box to account for drawing the boundary edge
         // An edge drawn at x=0 will cover (-line_width/2 .. line_width/2)
-        if options.draw_edges && options.draw_boundary {
-            let padding = options.line_width * 0.5;
+        if options.draw_edges && options.draw_boundary || options.draw_vertices {
+            let mut padding = options.line_width * 0.5;
+            if options.draw_vertices {
+                padding = padding.max(options.vertex_size * 0.5);
+            }
             // the image would have extend (-padding .. size + padding) instead of (0 .. size)
             // mapping these points back means (start - padding * width / size .. end + padding * size / width)
             for (range, size) in bounding_box.iter_mut().zip([options.image_size.0, options.image_size.1]) {
@@ -285,6 +292,9 @@ mod svg {
             if self.options.draw_edges {
                 self.write_edges(w)?;
             }
+            if self.options.draw_vertices {
+                self.write_vertices(w)?;
+            }
             self.write_points(w)?;
             self.write_footer(w)?;
             Ok(())
@@ -322,6 +332,18 @@ mod svg {
                         writeln!(w, "{}", path.width(width).color(color.into()))?;
                     }
                 }
+            }
+            Ok(())
+        }
+
+        fn write_vertices(&self, w: &mut dyn Write) -> std::io::Result<()> {
+            let radius = self.options.vertex_size * 0.5;
+            let color = svg_fmt::black();
+            for vertex in self.regioncam.vertices() {
+                let (x, y) = self.vertex_coord(vertex);
+                let circle = Circle { x, y, radius, style: Style::default(), comment: None };
+                let circle = circle.fill(color);
+                writeln!(w, "{}", circle)?;
             }
             Ok(())
         }
@@ -411,17 +433,18 @@ mod piet {
             if self.options.draw_edges {
                 self.render_edges(ctx);
             }
+            if self.options.draw_vertices {
+                self.render_vertices(ctx);
+            }
             self.render_points(ctx);
         }
 
         fn render_faces(&self, ctx: &mut impl RenderContext) {
-            // draw faces
             for face in self.regioncam.faces() {
                 let path = self.face_to_piet_path(face);
                 let color = self.face_color(face);
                 ctx.fill(path.as_slice(), &piet::Color::from(color));
             }
-            //Ok(())
         }
 
         fn render_edges(&self, ctx: &mut impl RenderContext) {
@@ -433,6 +456,15 @@ mod piet {
                         ctx.stroke(path, &piet::Color::from(color), width.into());
                     }
                 }
+            }
+        }
+
+        fn render_vertices(&self, ctx: &mut impl RenderContext) {
+            let radius = f64::from(self.options.vertex_size) * 0.5;
+            let color = piet::Color::BLACK;
+            for vertex in self.regioncam.vertices() {
+                let pos = to_point(self.vertex_coord(vertex));
+                ctx.fill(Circle::new(pos, radius), &color);
             }
         }
 

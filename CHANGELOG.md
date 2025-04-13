@@ -8,9 +8,11 @@
 
 * Piet based rendering backend, with direct png rendering (`write_png`).
 * Added more options to customize rendering.
+* Added option to render vertices
 
 ### Changed
 
+* Face colors are based on hash of activation pattern, this makes colors stable even when other faces change.
 * Remove `_repr_svg_` in python interface in favor of `_repr_png_`, this should result in smaller notebook files.
 
 ## 0.3.0 - 2025-02-12
