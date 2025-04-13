@@ -164,11 +164,24 @@ pub struct Renderer<'a> {
 
 impl<'a> Renderer<'a> {
     pub fn new(regioncam: &'a Regioncam, options: &'a RenderOptions) -> Self {
-        let bounding_box: ndarray::ArrayBase<ndarray::OwnedRepr<Range<f32>>, ndarray::Dim<[usize; 1]>> = bounding_box(&regioncam.inputs().view());
+        let mut bounding_box = bounding_box(&regioncam.inputs().view());
         let values = regioncam.activations_last();
         let last_layer_is_classification = values.ncols() == 1;
         let decision_boundary_layer = last_layer_is_classification.then_some(regioncam.last_layer());
 
+        // Adjust bounding box to account for drawing the boundary edge
+        // An edge drawn at x=0 will cover (-line_width/2 .. line_width/2)
+        if options.draw_edges && options.draw_boundary {
+            let padding = options.line_width * 0.5;
+            // the image would have extend (-padding .. size + padding) instead of (0 .. size)
+            // mapping these points back means (start - padding * width / size .. end + padding * size / width)
+            for (range, size) in bounding_box.iter_mut().zip([options.image_size.0, options.image_size.1]) {
+                let width = range.end - range.start;
+                range.start -= padding * width / size;
+                range.end += padding * width / size;
+            }
+        }
+        
         Renderer { options, regioncam, bounding_box, decision_boundary_layer, points: &[] }
     }
     pub fn with_points(mut self, points: &'a impl AsRef<[MarkedPoint]>) -> Self {
@@ -280,11 +293,8 @@ mod svg {
         fn write_header(&self, w: &mut dyn Write) -> std::io::Result<()> {
             // Note: svg_fmt::BeginSvg doesn't support width and height attributes
             let size = self.options.image_size;
-            let padding = if self.options.draw_boundary { self.options.line_width * 0.5 } else { 0.0 };
             writeln!(w, r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{} {} {} {}" width="{}" height="{}">"#,
-                -padding, -padding,
-                size.0 + 2.0 * padding, size.1 + 2.0 * padding,
-                size.0 + 2.0 * padding, size.1 + 2.0 * padding
+                0.0, 0.0, size.0, size.1, size.0, size.1
             )
         }
 
