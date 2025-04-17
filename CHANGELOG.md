@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## 0.4.1 - 2025-04-13
+
+### Added
+
+* Added `color` argument to `mark_points`
+* Add text_only_markers variant
+* Add option to change size of points through plane
+
+### Changed
+
+* `Regioncam::from_plane` now takes `size` argument
+
 ## 0.4.0 - 2025-04-13
 
 ### Added

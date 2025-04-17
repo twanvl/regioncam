@@ -31,6 +31,7 @@ pub struct RenderOptions {
     pub point_size: f32,
     pub font_size: f32,
     pub vertex_size: f32,
+    pub text_only_markers: bool,
 }
 
 impl Default for RenderOptions {
@@ -56,6 +57,7 @@ impl Default for RenderOptions {
             point_size: 8.0,
             font_size: 16.0,
             vertex_size: 3.0,
+            text_only_markers: false,
         }
     }
 }
@@ -359,7 +361,15 @@ mod svg {
                     writeln!(w, "{}", circle)?;
                 }
                 if !point.label.is_empty() && self.options.font_size > 0.0 {
-                    writeln!(w, "{}", text(x + radius, y - radius, &point.label).size(self.options.font_size).color(color))?;
+                    let label_x = x + radius;
+                    let mut label_y = y - radius;
+                    let mut align  = Align::Left;
+                    if self.options.text_only_markers {
+                        align = Align::Center;
+                        label_y -= self.options.font_size * 0.5;
+                    }
+                    let text = text(label_x, label_y, &point.label).size(self.options.font_size).color(color).align(align);
+                    writeln!(w, "{}", text)?;
                 }
             }
             Ok(())
@@ -482,7 +492,12 @@ mod piet {
                       .font(FontFamily::SANS_SERIF, font_size_pt)
                       .text_color(color)
                       .build().unwrap();
-                    let text_pos = pos + (radius, -radius - layout.line_metric(0).map_or(0.0, |m|m.baseline));
+                    let text_pos =
+                        if self.options.text_only_markers {
+                            Point::new(pos.x - layout.size().width * 0.5, pos.y - layout.size().height * 0.5)
+                        } else {
+                            pos + (radius, -radius - layout.line_metric(0).map_or(0.0, |m|m.baseline))
+                        };
                     ctx.draw_text(&layout, text_pos);
                 }
             }

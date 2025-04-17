@@ -6,7 +6,7 @@ authors.workspace = true
 description.workspace = true
 
 [workspace.package]
-version = "0.4.0"
+version = "0.4.1"
 authors = ["Twan van Laarhoven <twanvl@gmail.com>"]
 description = "Visualize linear regions in neural networks"
 

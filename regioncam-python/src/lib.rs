@@ -46,15 +46,20 @@ mod regioncam {
         }
         /// Create a Regioncam object for a plane through the given points.
         #[staticmethod]
-        #[pyo3(signature=(points, labels=vec![]))]
-        fn through_points<'py>(#[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>, mut labels: Vec<String>) -> PyResult<Self> {
+        #[pyo3(signature=(points, labels=vec![], colors=vec![], size=1.5))]
+        fn through_points<'py>(
+                #[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>,
+                labels: Vec<String>,
+                #[pyo3(from_py_with="extract_colors")] colors: Vec<Color>,
+                size: f32,
+        ) -> PyResult<Self> {
             let plane = Plane::through_points(&points.readonly().as_array());
-            let regioncam = Regioncam::from_plane(&plane);
-            labels.resize(plane.points.nrows(), String::new());
-            let marked_points = plane.points.rows().into_iter().zip(labels.into_iter()).map(
-                    |(point,label)| {
+            let regioncam = Regioncam::from_plane(&plane, size);
+            let labels = labels.into_iter().chain(std::iter::repeat(String::new()));
+            let colors = colors.into_iter().map(Some).chain(std::iter::repeat(None));
+            let marked_points = plane.points.rows().into_iter().zip(labels).zip(colors).map(
+                    |((point, label), color)| {
                         let position = point.as_slice().unwrap().try_into().unwrap();
-                        let color = None;
                         MarkedPoint { position, label, color }
                     }
                 ).collect();
@@ -66,12 +71,22 @@ mod regioncam {
         /// 
         /// If this Regioncam was constructed with a plane through points,
         ///  then these points are projected onto that plane.
-        #[pyo3(signature=(points, labels=vec![], project_to_plane=true))]
-        fn mark_points<'py>(&mut self, #[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>, mut labels: Vec<String>, project_to_plane: bool) -> PyResult<()> {
+        /// 
+        /// Parameters:
+        ///  * points: Point to mark
+        ///  * labels: List of string labels for the points
+        ///  * colors: List of colors for the points (default: no color)
+        #[pyo3(signature=(points, labels=vec![], colors=vec![], project_to_plane=true))]
+        fn mark_points<'py>(
+                &mut self,
+                #[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>,
+                labels: Vec<String>,
+                #[pyo3(from_py_with="extract_colors")] colors: Vec<Color>,
+                project_to_plane: bool
+        ) -> PyResult<()> {
             let py = points.py();
             let points = points.readonly();
             let points = points.as_array();
-            labels.resize(points.nrows(), String::new());
             let projected_points =
                 if let Some(plane) = &self.plane {
                     if project_to_plane {
@@ -79,10 +94,11 @@ mod regioncam {
                     } else { None }
                 } else { None };
             let points = projected_points.as_ref().map_or(points, |x| x.view());
-            self.marked_points.extend(points.rows().into_iter().zip(labels.into_iter()).map(
-                    |(point,label)| {
+            let labels = labels.into_iter().chain(std::iter::repeat(String::new()));
+            let colors = colors.into_iter().map(Some).chain(std::iter::repeat(None));
+            self.marked_points.extend(points.rows().into_iter().zip(labels).zip(colors).map(
+                    |((point, label), color)| {
                         let position = point.as_slice().unwrap().try_into().unwrap();
-                        let color = None;
                         MarkedPoint { position, label, color }
                     }
                 ));
@@ -1007,6 +1023,11 @@ mod regioncam {
                 } else if k == "layer_line_colors" || k == "line_colors" {
                     opts.layer_line_colors = extract_colors(&v)?;
                     opts.line_color_by_layer = true;
+                } else if k == "text_only_markers" {
+                    opts.text_only_markers = v.extract()?;
+                    if opts.text_only_markers {
+                        opts.point_size = 0.0;
+                    }
                 } else {
                     return Err(PyValueError::new_err(format!("Unexpected argument: '{k}'")));
                 }

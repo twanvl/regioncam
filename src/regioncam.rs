@@ -160,8 +160,8 @@ impl Regioncam {
         }
         Self::from_polygon(points)
     }
-    pub fn from_plane(plane: &Plane) -> Self {
-        let mut out = Self::square(plane.size() * 1.5);
+    pub fn from_plane(plane: &Plane, size: f32) -> Self {
+        let mut out = Self::square(plane.size() * size);
         out.add(&plane.mapping);
         out
     }
