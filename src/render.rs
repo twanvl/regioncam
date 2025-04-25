@@ -328,11 +328,11 @@ mod svg {
             // draw edges
             for edge in self.regioncam.edges() {
                 match self.edge_style(edge) {
-                    None => (),
-                    Some((color, width)) => {
+                    Some((color, width)) if width > 0.0 => {
                         let path = self.edge_to_svg_path(edge);
                         writeln!(w, "{}", path.width(width).color(color.into()))?;
                     }
+                    _ => (),
                 }
             }
             Ok(())
@@ -460,11 +460,11 @@ mod piet {
         fn render_edges(&self, ctx: &mut impl RenderContext) {
             for edge in self.regioncam.edges() {
                 match self.edge_style(edge) {
-                    None => (),
-                    Some((color, width)) => {
+                    Some((color, width)) if width > 0.0 => {
                         let path = self.edge_to_piet_path(edge);
                         ctx.stroke(path, &piet::Color::from(color), width.into());
                     }
+                    _ => (),
                 }
             }
         }
