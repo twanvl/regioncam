@@ -7,10 +7,10 @@ use approx::assert_abs_diff_eq;
 use crate::util::*;
 use crate::partition::*;
 use crate::plane::*;
-use crate::nn::NNModule;
+pub use crate::nn::NNBuilder;
 
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct EdgeLabel {
     /// Layer on which this edge was introduced
     pub layer: usize,
@@ -41,6 +41,9 @@ pub struct Layer {
 }
 
 impl Layer {
+    pub fn continuous(&self) -> bool {
+        self.continuous
+    }
     pub fn vertices(&self) -> &Array2<f32> {
         &self.vertex_data
     }
@@ -54,6 +57,9 @@ impl Layer {
             LayerType::ReLU {..} => true,
             LayerType::MaxPool {..} => true,
         }
+    }
+    pub fn dim(&self) -> usize {
+        self.vertex_data.ncols()
     }
     fn hash_face(&self, face: Face, hasher: &mut impl Hasher) {
         match &self.layer_type {
@@ -106,7 +112,7 @@ impl Layer {
 pub struct Regioncam {
     partition: Partition,
     /// Data for vertice & faces at each layer
-    layers: Vec<Layer>,
+    pub(crate) layers: Vec<Layer>,
     edge_label: Vec<EdgeLabel>,    // edge -> label
 }
 
@@ -182,9 +188,6 @@ impl Regioncam {
     }
     pub fn num_layers(&self) -> usize {
         self.layers.len()
-    }
-    pub fn last_layer(&self) -> usize {
-        self.num_layers() - 1
     }
     pub fn activations(&self, layer: usize) -> &Array2<f32> {
         &self.layers[layer].vertex_data
@@ -294,6 +297,14 @@ impl Regioncam {
     }
     pub fn halfedges_leaving_vertex(&self, vertex: Vertex) -> HalfedgesLeavingVertex<'_> {
         self.partition.halfedges_leaving_vertex(vertex)
+    }
+    // The label of a vertex is the smallest edge_label of an incident edge
+    pub fn vertex_label(&self, vertex: Vertex) -> EdgeLabel {
+        self.halfedges_leaving_vertex(vertex)
+            .map(|he| self.edge_label(he.edge()))
+            .min()
+            .copied()
+            .unwrap_or(EdgeLabel::default())
     }
 
     // Invariants
@@ -457,7 +468,7 @@ impl Regioncam {
     /// Split all faces in the partition by treating zeros of the given layer as edges.
     fn split_by_zero_at(&mut self, layer: usize) {
         // Split faces on activation = 0
-        let acts = self.activations(layer);
+        let acts: &ndarray::ArrayBase<ndarray::OwnedRepr<f32>, ndarray::Dim<[usize; 2]>> = self.activations(layer);
         for dim in 0..acts.len_of(Axis(1)) {
             let edge_label = EdgeLabel { layer: self.num_layers(), dim };
             struct ZeroSplitter {
@@ -511,7 +522,7 @@ impl Regioncam {
         mask
     }
 
-    /// Aplit all faces in the partition at points where argmax of dims changes
+    /// Split all faces in the partition at points where argmax of dims changes
     /// Returns: (vertex_max, face_argmax)
     fn split_by_argmax_at(&mut self, layer: usize) -> (Array1<f32>, Array1<usize>) {
         // It is hard to do this fully correctly
@@ -523,11 +534,11 @@ impl Regioncam {
         let acts = self.activations(layer);
         let dims = {
             // for each vertex: find argmax
-            let vertex_argmax = acts.rows().into_iter().map(argmax).collect::<Vec<usize>>();
+            let vertex_argmax = acts.rows().into_iter().map(argmax);
             // sort dims by frequency
-            let histogram_argmax = histogram(&vertex_argmax, acts.ncols());
+            let histogram_argmax = histogram(vertex_argmax, acts.ncols());
             let mut dims = Vec::from_iter(0..histogram_argmax.len());
-            dims.sort_by(|i, j| histogram_argmax[*j].cmp(&histogram_argmax[*i])); // Note: reverse order
+            dims.sort_by_key(|i| std::cmp::Reverse(histogram_argmax[*i])); // most frequent first
             dims
         };
 
@@ -632,11 +643,22 @@ impl Regioncam {
             argmax(delta_from_max.view())
         }).collect()
     }
+}
 
-    // Neural network operations
+// Neural network operations
+
+impl NNBuilder for Regioncam {
+    type LayerNr = LayerNr;
+
+    fn last_layer(&self) -> LayerNr {
+        self.num_layers() - 1
+    }
 
     /// Update partition by adding a ReLU layer, that takes as input the output of the given layer.
-    pub fn relu_at(&mut self, layer: LayerNr) -> LayerNr {
+    /// This means:
+    ///  * split all faces at activation[l,_,d]=0 for any dim d
+    ///  * set activation[l+1] = max(0,activation[l])
+    fn relu_at(&mut self, layer: LayerNr) -> LayerNr {
         // Split faces
         self.split_by_zero_at(layer);
         // Compute relu output for vertices
@@ -652,15 +674,8 @@ impl Regioncam {
         self.layers.push(Layer{ vertex_data, face_data, continuous, layer_type });
         self.last_layer()
     }
-    /// Update partition by adding a ReLU layer
-    /// This means:
-    ///  * split all faces at activation[l,_,d]=0 for any dim d
-    ///  * set activation[l+1] = max(0,activation[l])
-    pub fn relu(&mut self) {
-        self.relu_at(self.last_layer());
-    }
 
-    pub fn leaky_relu_at(&mut self, layer: LayerNr, negative_slope: f32) -> LayerNr {
+    fn leaky_relu_at(&mut self, layer: LayerNr, negative_slope: f32) -> LayerNr {
         self.split_by_zero_at(layer);
         // Compute leaky relu output for vertices
         let input_layer = &self.layers[layer];
@@ -675,11 +690,8 @@ impl Regioncam {
         self.layers.push(Layer{ vertex_data, face_data, continuous, layer_type });
         self.last_layer()
     }
-    pub fn leaky_relu(&mut self, negative_slope: f32) {
-        self.leaky_relu_at(self.last_layer(), negative_slope);
-    }
 
-    pub fn max_pool_at(&mut self, layer: LayerNr) -> LayerNr {
+    fn max_pool_at(&mut self, layer: LayerNr) -> LayerNr {
         let (max, face_argmax) = self.split_by_argmax_at(layer);
         // New face data takes the given dim
         let input_layer = &self.layers[layer];
@@ -688,17 +700,13 @@ impl Regioncam {
         // New vertex data is just the max value
         let vertex_data = max.insert_axis(Axis(1));
         // Add layer
-        println!("max_pool: layer {:?}, self {} faces", face_argmax.shape(), self.num_faces());
         let continuous = input_layer.continuous;
         let layer_type = LayerType::MaxPool{ face_argmax };
         self.layers.push(Layer{ vertex_data, face_data, continuous, layer_type });
         self.last_layer()
     }
-    pub fn max_pool(&mut self) {
-        self.max_pool_at(self.last_layer());
-    }
 
-    pub fn argmax_pool_at(&mut self, layer: LayerNr) -> LayerNr {
+    fn argmax_pool_at(&mut self, layer: LayerNr) -> LayerNr {
         let (_max, face_argmax) = self.split_by_argmax_at(layer);
         // New face data takes the given dim
         let face_data = concatenate![Axis(1),
@@ -706,24 +714,21 @@ impl Regioncam {
             face_argmax.view().insert_axis(Axis(1)).mapv(|x| x as f32)
         ];
         let face_data = face_data.insert_axis(Axis(2));
-        // New vertex data is just the max value
+        // New vertex data is argmax of inputs
         let acts = self.activations(layer);
         let vertex_argmax = Array::from_iter(acts.rows().into_iter().map(|row| argmax(row) as f32));
-        let vertex_data =vertex_argmax.insert_axis(Axis(1));
+        let vertex_data = vertex_argmax.insert_axis(Axis(1));
         // Add layer
         let continuous = false;
         let layer_type = LayerType::MaxPool{ face_argmax };
         self.layers.push(Layer{ vertex_data, face_data, continuous, layer_type });
         self.last_layer()
     }
-    pub fn argmax_pool(&mut self) {
-        self.argmax_pool_at(self.last_layer());
-    }
 
-    pub fn sign_at(&mut self, layer: LayerNr) -> LayerNr {
+    fn sign_at(&mut self, layer: LayerNr) -> LayerNr {
         // Split faces
         self.split_by_zero_at(layer);
-        // Compute relu output for vertices
+        // Compute sign for vertices
         let input_layer = &self.layers[layer];
         let vertex_data = input_layer.vertex_data.mapv(|x| if x >= 0.0 { 1.0 } else { 0.0 });
         // Apply mask to compute per-face activation
@@ -738,26 +743,20 @@ impl Regioncam {
         self.layers.push(Layer{ vertex_data, face_data, continuous, layer_type });
         self.last_layer()
     }
-    pub fn sign(&mut self) {
-        self.sign_at(self.last_layer());
-    }
     
     /// Append a classification layer: with 1 output a sign based classifier, with >1 outputs an argmax
-    pub fn decision_boundary_at(&mut self, layer: LayerNr) -> LayerNr {
+    fn decision_boundary_at(&mut self, layer: LayerNr) -> LayerNr {
         if self.layers[layer].vertex_data.ncols() == 1 {
             self.sign_at(layer)
         } else {
             self.argmax_pool_at(layer)
         }
     }
-    pub fn decision_boundary(&mut self) {
-        self.decision_boundary_at(self.last_layer());
-    }
-    
+
     /// Append a layer that computes output using the given function.
     /// The function should be linear, without a bias term.
     /// Then `add_bias` should add the bias term
-    pub fn generalized_linear_at(&mut self, layer: LayerNr, fun: impl Fn(ArrayView2<f32>) -> Array2<f32>, add_bias: impl Fn(ArrayViewMut2<f32>)) -> LayerNr {
+    fn generalized_linear_at(&mut self, layer: LayerNr, fun: impl Fn(ArrayView2<f32>) -> Array2<f32>, add_bias: impl Fn(ArrayViewMut2<f32>)) -> LayerNr {
         // Compute vertex data (x' = x*w + b)
         let input_layer = &self.layers[layer];
         let mut vertex_data = fun(input_layer.vertex_data.view());
@@ -780,19 +779,7 @@ impl Regioncam {
         self.last_layer()
     }
 
-    /// Append a layer that computes output using a linear transformation:
-    ///   x_{l} = w*x_l' + b.
-    pub fn linear_at(&mut self, layer: LayerNr, weight: &ArrayView2<f32>, bias: &ArrayView1<f32>) -> LayerNr {
-        self.generalized_linear_at(layer, |x| x.dot(weight), |mut x| x += bias)
-    }
-    /// Append a layer that computes output using a linear transformation:
-    ///   x_{l+1} = w*x_l + b.
-    pub fn linear(&mut self, weight: &ArrayView2<f32>, bias: &ArrayView1<f32>) {
-        self.linear_at(self.last_layer(), weight, bias);
-    }
-
-    /// Append a layer that adds the output of two existing layers
-    pub fn sum(&mut self, layer1: LayerNr, layer2: LayerNr) -> LayerNr {
+    fn sum(&mut self, layer1: LayerNr, layer2: LayerNr) -> LayerNr {
         let layer1 = &self.layers[layer1];
         let layer2 = &self.layers[layer2];
         self.layers.push(Layer {
@@ -802,18 +789,6 @@ impl Regioncam {
             layer_type: LayerType::Linear,
         });
         self.last_layer()
-    }
-    /// Append a layer that adds an earlier layer to the output
-    pub fn residual(&mut self, layer: LayerNr) {
-        self.sum(layer, self.last_layer());
-    }
-    
-    /// Add a NNmodule to the network
-    pub fn add_at(&mut self, layer: LayerNr, module: &impl NNModule) -> LayerNr {
-        module.add_to(self, layer)
-    }
-    pub fn add(&mut self, module: &impl NNModule) {
-        self.add_at(self.last_layer(), module);
     }
 }
 

@@ -3,7 +3,7 @@ use std::time::Instant;
 use rand::rngs::SmallRng;
 use rand::SeedableRng;
 use regioncam::nn::Linear;
-use regioncam::Regioncam;
+use regioncam::{Regioncam, NNBuilder};
 
 /// A (relatively) large MLP with a single hidden layer
 fn large_random_mlp() {

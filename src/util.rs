@@ -20,10 +20,10 @@ pub(crate) fn argmax(row: ArrayView1<f32>) -> usize {
     max.map_or(0, |(i, _)| i)
 }
 
-pub(crate) fn histogram(values: &[usize], len: usize) -> Vec<usize> {
+pub(crate) fn histogram(values: impl IntoIterator<Item=usize>, len: usize) -> Vec<usize> {
     let mut counts = vec![0; len];
     for value in values {
-        counts[*value] += 1;
+        counts[value] += 1;
     }
     counts
 }

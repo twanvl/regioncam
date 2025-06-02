@@ -8,5 +8,6 @@ pub mod plane;
 
 pub use partition::{Vertex, Halfedge, Edge, Face};
 pub use regioncam::*;
+pub use nn::NNBuilder;
 pub use plane::*;
 pub use render::*;
