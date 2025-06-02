@@ -90,7 +90,7 @@ mod regioncam {
             let projected_points =
                 if let Some(plane) = &self.plane {
                     if project_to_plane {
-                        Some(plane.borrow(py).0.inverse(&points.view()))
+                        Some(plane.borrow(py).0.project(&points.view()))
                     } else { None }
                 } else { None };
             let points = projected_points.as_ref().map_or(points, |x| x.view());
@@ -682,7 +682,7 @@ mod regioncam {
             self.0.forward(&points.readonly().as_array()).to_pyarray(points.py())
         }
         fn inverse<'py>(&self, #[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>) -> Bound<'py, PyArray2<f32>> {
-            self.0.inverse(&points.readonly().as_array()).to_pyarray(points.py())
+            self.0.project(&points.readonly().as_array()).to_pyarray(points.py())
         }
         #[getter]
         fn weight<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {

@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::ops::{Add, Mul, Range, Sub};
 
-use ndarray::{s, Array, Array1, ArrayBase, ArrayView, ArrayView1, ArrayView2, Axis, Data, Dimension, Ix0, Ix1, Ix2, Ix3, RemoveAxis, Slice, SliceArg, SliceInfo, SliceInfoElem};
+use ndarray::{s, Array, Array1, Array2, ArrayBase, ArrayView, ArrayView1, ArrayView2, Axis, Data, Dimension, Ix0, Ix1, Ix2, Ix3, RemoveAxis, Slice, SliceArg, SliceInfo, SliceInfoElem};
 use num_traits::Zero;
 
 /// Rectified linear activation function
@@ -157,4 +157,136 @@ pub fn find_zero(a: f32, b: f32) -> Option<f32> {
         debug_assert!(t >= 0.0 && t <= 1.0);
         Some(t)
     }
+}
+
+
+/// Is a given list a permutation?
+pub fn is_permutation<I>(perm: &[I]) -> bool
+    where I: Copy, usize: From<I>
+{
+    let count = histogram(perm.iter().copied().map(usize::from), perm.len());
+    count.iter().copied().all(|c| c == 1)
+}
+
+/// Permute the elements of a slice.
+/// The permutation can be a slice of any index type
+pub fn permute<A, I>(vec: &[A], perm: &[I]) -> Vec<A>
+    where A: Copy, I: Copy, usize: From<I>
+{
+    perm.iter().map(|i| vec[usize::from(*i)]).collect()
+}
+
+/// Inversely permute the elements of a slice.
+pub fn inverse_permute<A, I>(vec: &[A], perm: &[I]) -> Vec<A>
+    where A: Copy + Default, I: Copy, usize: From<I>
+{
+    let mut out = vec![Default::default(); perm.len()];
+    for (i, x) in perm.iter().zip(vec) {
+        out[usize::from(*i)] = *x;
+    }
+    out
+}
+
+/// Permute the rows of a 2D array.
+pub fn permute_rows<A, I>(array: &Array2<A>, perm: &[I]) -> Array2<A>
+    where A: Copy + Zero, I: Copy, usize: From<I>
+{
+    assert_eq!(array.len_of(Axis(0)), perm.len());
+    let mut out = Array2::zeros(array.raw_dim());
+    for (mut out_row, i) in out.axis_iter_mut(Axis(0)).zip(perm) {
+        out_row.assign(&array.row(usize::from(*i)));
+    }
+    out
+}
+
+
+/// Insert multiple elements into a vector efficiently.
+/// 
+/// Equivalent to:
+///     for (index, element) in insertions {
+///         vec.insert(index, element);
+///     }
+/// 
+/// The indices must be in weakly *decreasing* order.
+pub(crate) fn insert_many<T: Default + Copy>(vec: &mut Vec<T>, insertions: impl ExactSizeIterator<Item=(usize, T)>) {
+    let mut in_pos  = vec.len();
+    let mut out_pos = vec.len() + insertions.len();
+    // Note: we don't actually need the vec elements to be initialized.
+    // An unsafe version could be slightly faster, and avoid a Default constraint.
+    vec.resize(vec.len() + insertions.len(), T::default());
+    for (index, element) in insertions {
+        debug_assert!(index <= in_pos);
+        while index < in_pos {
+            out_pos -= 1;
+            in_pos -= 1;
+            vec[out_pos] = vec[in_pos];
+        }
+        out_pos -= 1;
+        vec[out_pos] = element;
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use approx::assert_abs_diff_eq;
+    use rand::rngs::SmallRng;
+    use rand::prelude::*;
+    use super::*;
+
+    #[test]
+    fn find_zero_is_zero() {
+        let mut rng = SmallRng::seed_from_u64(42);
+        for _ in 0..100 {
+            let a = rng.gen_range(-5.0..5.0);
+            let b = rng.gen_range(-5.0..5.0);
+            match find_zero(a, b) {
+                Some(t) => {
+                    assert!(0.0 <= t);
+                    assert!(t <= 1.0);
+                    assert_abs_diff_eq!(lerp(a, b, t), 0.0, epsilon=1e-5);
+                }
+                None => {
+                    assert_eq!((a < 0.0), (b < 0.0));
+                }
+            }
+        }
+    }
+
+    // Generate a random permutation
+    fn random_permutation<R: Rng + ?Sized>(n: usize, rng: &mut R) -> Vec<usize> {
+        let mut perm: Vec<usize> = (0..n).collect();
+        perm.shuffle(rng);
+        perm
+    }
+
+    #[test]
+    fn inverse_permute_test() {
+        let mut rng = SmallRng::seed_from_u64(42);
+        for n in 0..20 {
+            let vec = (0..n).collect::<Vec<_>>();
+            let perm = random_permutation(n, &mut rng);
+            assert_eq!(vec, inverse_permute(&permute(&vec, &perm), &perm));
+            assert_eq!(vec, permute(&inverse_permute(&vec, &perm), &perm));
+        }
+    }
+
+    fn insert_many_spec<T>(vec: &mut Vec<T>, insertions: impl ExactSizeIterator<Item=(usize, T)>) {
+        for (index, element) in insertions {
+            vec.insert(index, element);
+        }
+    }
+    #[test]
+    fn insert_many_test() {
+        let test_cases = vec![
+            (vec![], vec![(0, 0)]),
+            (vec![5,6,7], vec![(3,0),(3,1),(1,8),(0,9)])];
+        for (vec, insertions) in test_cases {
+            let mut from_insert_many = vec.clone();
+            let mut from_insert_many_spec = vec.clone();
+            insert_many(&mut from_insert_many, insertions.iter().copied());
+            insert_many_spec(&mut from_insert_many_spec, insertions.iter().copied());
+            assert_eq!(from_insert_many, from_insert_many_spec)
+        }
+    }
+
 }

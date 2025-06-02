@@ -5,12 +5,12 @@ use std::fmt::Debug;
 // Index types
 
 //type Index = usize;
-type Index = u32;
+pub(crate) type Index = u32;
 
 /// Declare a type to be used for indexes
 macro_rules! declare_index_type {
     ($vis:vis $ty:ident) => {
-        #[derive(Copy, Clone, PartialEq, Eq, Hash)]
+        #[derive(Copy, Clone, PartialEq, Eq, Hash, Default)]
         $vis struct $ty(Index);
 
         impl $ty {
@@ -36,6 +36,7 @@ macro_rules! declare_index_type {
         }
     }
 }
+pub(crate) use declare_index_type;
 
 /// Declare an OptA type that works like Option<A> but takes no extra space
 /// It would be nice if we could use NonMax for the indices, but that makes conversion to integers non-trivial
@@ -392,10 +393,6 @@ impl Partition {
         }
     }
 
-    /*
-    pub fn merge_faces_cb(&mut self, edge: Edge, before_remove_edge: impl FnMut(Edge), before_remove_face: impl FnMut(Face)) -> Face {
-    }
-    */
     /// Merge two faces by removing the edge between them.
     /// This function only marks the edge as invalid, without actually removing it, because that would mess up the order of edges.
     ///

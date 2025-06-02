@@ -2,6 +2,7 @@
 pub mod util;
 pub mod partition;
 pub mod regioncam;
+pub mod regioncam1d;
 pub mod nn;
 pub mod render;
 pub mod plane;
