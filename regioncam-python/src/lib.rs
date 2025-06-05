@@ -1,20 +1,19 @@
 // Python wrapper
-use pyo3::prelude::*;
-use pyo3::types::PyList;
-use numpy::*;
+use std::ops::Range;
 use std::fs::File;
 use std::fmt::Write;
 
-use ndarray::{Axis, Dim, Dimension};
+use ndarray::{Axis, Dim, Dimension, CowArray};
+use numpy::*;
+use pyo3::prelude::*;
 use pyo3::exceptions::{PyAttributeError, PyIndexError, PyValueError};
-use pyo3::types::{PyDict, PyString, PyTuple};
+use pyo3::types::{PyDict, PyList, PyString, PyTuple};
 use pyo3::{intern, PyClass, DowncastError, PyTraverseError, PyVisit};
 
 use ::regioncam::*;
 
 #[pymodule(name = "regioncam")]
 mod regioncam {
-
     use super::*;
 
     #[pyclass]
@@ -69,13 +68,11 @@ mod regioncam {
 
         /// Mark points in the input space.
         /// 
-        /// If this Regioncam was constructed with a plane through points,
-        ///  then these points are projected onto that plane.
-        /// 
         /// Parameters:
         ///  * points: Point to mark
         ///  * labels: List of string labels for the points
         ///  * colors: List of colors for the points (default: no color)
+        ///  * project_to_plane: If this Regioncam was constructed on a plane, then the points are projected onto that plane (default: true)
         #[pyo3(signature=(points, labels=vec![], colors=vec![], project_to_plane=true))]
         fn mark_points<'py>(
                 &mut self,
@@ -87,13 +84,12 @@ mod regioncam {
             let py = points.py();
             let points = points.readonly();
             let points = points.as_array();
-            let projected_points =
-                if let Some(plane) = &self.plane {
-                    if project_to_plane {
-                        Some(plane.borrow(py).0.project(&points.view()))
-                    } else { None }
-                } else { None };
-            let points = projected_points.as_ref().map_or(points, |x| x.view());
+            let points = 
+                if let Some(plane) = self.plane.as_ref().filter(|_| project_to_plane) {
+                    CowArray::from(plane.borrow(py).0.project(&points.view()))
+                } else {
+                    CowArray::from(points)
+                };
             let labels = labels.into_iter().chain(std::iter::repeat(String::new()));
             let colors = colors.into_iter().map(Some).chain(std::iter::repeat(None));
             self.marked_points.extend(points.rows().into_iter().zip(labels).zip(colors).map(
@@ -198,6 +194,34 @@ mod regioncam {
             }
         }
         
+        /// Extract a 1D slice of this 2D regioncam
+        /// 
+        /// Parameters:
+        ///  * line:             A line in 2d space, or
+        ///  * points:           A 2d array with 2 points
+        ///  * project_to_plane: If this Regioncam was constructed on a plane, then the points are projected onto that plane (default: true)
+        #[pyo3(signature=(line_or_points, project_to_plane=true))]
+        fn slice<'py>(&self, line_or_points: LineOrPoints<'py>, project_to_plane: bool) -> PyRegioncam1D {
+            let line = match line_or_points {
+                LineOrPoints::Line(line) => line.get().0.clone(),
+                LineOrPoints::Points(points) => {
+                    let py = points.py();
+                    let points = points.readonly();
+                    let points = points.as_array();
+                    let points = 
+                        if let Some(plane) = self.plane.as_ref().filter(|_| project_to_plane) {
+                            CowArray::from(plane.borrow(py).0.project(&points.view()))
+                        } else {
+                            CowArray::from(points)
+                        };
+                    Plane1D::through_points(&points.view())
+                }
+            };
+            PyRegioncam1D {
+                regioncam: self.regioncam.slice(&line)
+            }
+        }
+        
         /// Visualize the regions, and write this to an svg file.
         ///
         /// Parameters:
@@ -292,9 +316,28 @@ mod regioncam {
             self.render_options = parse_render_options(&self.render_options, kwargs)?;
             Ok(())
         }
+    }
 
-        // layers
+    #[derive(FromPyObject)]
+    enum LineOrPoints<'py> {
+        Line(Bound<'py, PyPlane1D>),
+        Points(#[pyo3(from_py_with="downcast_array")] Bound<'py, PyArray2<f32>>),
+    }
 
+    impl PyRegioncam {
+        /// Make a Renderer for rendering the regioncam to svg or png
+        fn render<T>(&self, kwargs: Option<&Bound<'_, PyDict>>, fun: impl FnOnce(Renderer<'_>) -> PyResult<T>) -> PyResult<T> {
+            let svg_opts = parse_render_options(&self.render_options, kwargs)?;
+            let renderer = Renderer::new(&self.regioncam, &svg_opts).with_points(&self.marked_points);
+            fun(renderer)
+        }
+    }
+
+    /// Expose NNBuilder methods to python interface
+    macro_rules! impl_py_nn_builder {
+        ($class: ident) => {
+        #[pymethods]
+        impl $class {
         /// Add a new layer that applies a ReLU operation.
         ///
         /// Parameters:
@@ -389,49 +432,11 @@ mod regioncam {
         ///  * layer number of the output
         #[pyo3(signature=(layer, input_layer=None))]
         fn add<'a,'py>(&mut self, py: Python<'py>, #[pyo3(from_py_with="nn::to_layer")] layer: PyCow<'a, 'py, PyNNModule>, input_layer: Option<usize>) -> PyResult<usize> {
-            self.add_layer(py, &layer.borrow(), input_layer)
+            layer.borrow().add_to(py, &mut self.regioncam, input_layer)
         }
-    }
+    }}}
 
-    impl PyRegioncam {
-        /// Make a Renderer for rendering the regioncam to svg or png
-        fn render<T>(&self, kwargs: Option<&Bound<'_, PyDict>>, fun: impl FnOnce(Renderer<'_>) -> PyResult<T>) -> PyResult<T> {
-            let svg_opts = parse_render_options(&self.render_options, kwargs)?;
-            let renderer = Renderer::new(&self.regioncam, &svg_opts).with_points(&self.marked_points);
-            fun(renderer)
-        }
-
-        fn add_layer<'py>(&mut self, py: Python<'py>, module: &PyNNModule, input_layer: Option<usize>) -> PyResult<usize> {
-            let input_layer = input_layer.unwrap_or(self.regioncam.last_layer());
-            match module {
-                PyNNModule::Linear { weight, bias } => {
-                    let weight = weight.bind(py).readonly();
-                    let bias   = bias.bind(py).readonly();
-                    Ok(self.regioncam.linear_at(input_layer, &weight.as_array(), &bias.as_array()))
-                }
-                PyNNModule::ReLU() => {
-                    self.regioncam.relu_at(input_layer);
-                    Ok(self.regioncam.last_layer())
-                }
-                PyNNModule::LeakyReLU { negative_slope } => {
-                    self.regioncam.leaky_relu_at(input_layer, *negative_slope);
-                    Ok(self.regioncam.last_layer())
-                }
-                PyNNModule::Residual { layer } => {
-                    let after_layer = self.add_layer(py, layer.get(), Some(input_layer))?;
-                    self.regioncam.sum(input_layer, after_layer);
-                    Ok(self.regioncam.last_layer())
-                }
-                PyNNModule::Sequential { layers } => {
-                    let mut input_layer = input_layer;
-                    for item in layers {
-                        input_layer = self.add_layer(py, item.get(), Some(input_layer))?;
-                    }
-                    Ok(input_layer)
-                }
-            }
-        }
-    }
+    impl_py_nn_builder!(PyRegioncam);
 
 
     /// A face in a regioncam
@@ -660,39 +665,114 @@ mod regioncam {
     declare_pysequence!(Edges, num_edges, PyEdge, (|rc, index| PyEdge { rc, edge: Edge::from(index) }));
     declare_pysequence!(Layers, num_layers, PyLayer, (|rc, index| PyLayer { rc, layer: index }));
 
-
-    /// A plane through points in a high dimensional space
+    
+    // A 1d regioncam
     #[pyclass]
-    #[pyo3(frozen, name="Plane")]
-    struct PyPlane(Plane);
-    #[pymethods]
-    impl PyPlane {
-        #[new]
-        fn new<'py>(#[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>) -> Self {
-            let plane = Plane::through_points(&points.readonly().as_array());
-            PyPlane(plane)
-        }
-        #[staticmethod]
-        fn from_linear<'py>(#[pyo3(from_py_with="downcast_array")] weight: Bound<'py, PyArray2<f32>>, #[pyo3(from_py_with="downcast_array")] bias: Bound<'py, PyArray1<f32>>) -> Self {
-            let plane = Plane::from(::regioncam::nn::Linear{ weight: weight.to_owned_array(), bias: bias.to_owned_array() });
-            PyPlane(plane)
-        }
-
-        fn forward<'py>(&self, #[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>) -> Bound<'py, PyArray2<f32>> {
-            self.0.forward(&points.readonly().as_array()).to_pyarray(points.py())
-        }
-        fn inverse<'py>(&self, #[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>) -> Bound<'py, PyArray2<f32>> {
-            self.0.project(&points.readonly().as_array()).to_pyarray(points.py())
-        }
-        #[getter]
-        fn weight<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
-            self.0.mapping.weight.to_pyarray(py)
-        }
-        #[getter]
-        fn bias<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f32>> {
-            self.0.mapping.bias.to_pyarray(py)
+    #[pyo3(name="Regioncam1D")]
+    struct PyRegioncam1D {
+        regioncam: Regioncam1D,
+        //plane: Option<Py<PyPlane1D>>,
+    }
+    #[derive(FromPyObject)]
+    enum SizeArg1D {
+        Range(f32,f32),
+        Size(f32),
+    }
+    impl From<SizeArg1D> for Range<f32> {
+        fn from(size: SizeArg1D) -> Self {
+            match size {
+                SizeArg1D::Range(a, b) => a..b,
+                SizeArg1D::Size(size) => -size..size,
+            }
         }
     }
+
+    #[pymethods]
+    impl PyRegioncam1D {
+        #[new]
+        fn new(size: SizeArg1D) -> Self {
+            Self {
+                regioncam: Regioncam1D::new(size.into())
+            }
+        }
+        
+        /// The number of vertices in the partition.
+        /// Equivalent to `len(self.vertices)`
+        #[getter]
+        fn num_vertices(&self) -> usize {
+            self.regioncam.num_vertices()
+        }
+        /// The number of edges in the partition.
+        /// Equivalent to `len(self.edges)`
+        #[getter]
+        fn num_edges(&self) -> usize {
+            self.regioncam.num_edges()
+        }
+        /// The number of layers
+        /// Equivalent to `len(self.layers)`
+        #[getter]
+        fn num_layers(&self) -> usize {
+            self.regioncam.num_layers()
+        }
+        
+        #[getter]
+        fn inputs<'py>(&mut self, py: Python<'py>) -> Bound<'py, PyArray1<f32>> {
+            self.regioncam.sort();
+            self.regioncam.activations(0).column(0).to_pyarray(py)
+        }
+        #[getter]
+        fn outputs<'py>(&mut self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
+            self.activations(py, self.regioncam.last_layer())
+        }
+        // Values of vertices at the given layer
+        fn activations<'py>(&mut self, py: Python<'py>, layer: usize) -> Bound<'py, PyArray2<f32>> {
+            self.regioncam.sort();
+            self.regioncam.activations(layer).to_pyarray(py)
+        }
+    }
+
+    impl_py_nn_builder!(PyRegioncam1D);
+
+    //declare_pysequence!(PyRegioncam1D, Vertices1D, num_vertices, PyVertex1D, (|rc, index| PyVertex1D { rc, vertex: Vertex::from(index) }));
+
+    macro_rules! declare_py_plane {
+        ($PyPlane: ident, $Plane: ident) => {
+            /// A plane through points in a high dimensional space
+            #[pyclass]
+            #[pyo3(frozen, name="Plane")]
+            struct $PyPlane($Plane);
+            #[pymethods]
+            impl $PyPlane {
+                #[new]
+                fn new<'py>(#[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>) -> Self {
+                    let plane = $Plane::through_points(&points.readonly().as_array());
+                    Self(plane)
+                }
+                #[staticmethod]
+                fn from_linear<'py>(#[pyo3(from_py_with="downcast_array")] weight: Bound<'py, PyArray2<f32>>, #[pyo3(from_py_with="downcast_array")] bias: Bound<'py, PyArray1<f32>>) -> Self {
+                    let plane = $Plane::from(::regioncam::nn::Linear{ weight: weight.to_owned_array(), bias: bias.to_owned_array() });
+                    Self(plane)
+                }
+
+                fn forward<'py>(&self, #[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>) -> Bound<'py, PyArray2<f32>> {
+                    self.0.forward(&points.readonly().as_array()).to_pyarray(points.py())
+                }
+                fn inverse<'py>(&self, #[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>) -> Bound<'py, PyArray2<f32>> {
+                    self.0.project(&points.readonly().as_array()).to_pyarray(points.py())
+                }
+                #[getter]
+                fn weight<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
+                    self.0.mapping.weight.to_pyarray(py)
+                }
+                #[getter]
+                fn bias<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f32>> {
+                    self.0.mapping.bias.to_pyarray(py)
+                }
+            }
+        }
+    }
+    declare_py_plane!(PyPlane, Plane);
+    declare_py_plane!(PyPlane1D, Plane1D);
     
     /// A layer in a neural network
     #[pyclass]
@@ -764,6 +844,7 @@ mod regioncam {
                 _ => Err(PyAttributeError::new_err("shape undefined for this layer type"))
             }
         }
+
         fn to_string<'py>(&self, py: Python<'py>, indent: usize, w: &mut String) -> PyResult<()> {
             fn write_indent(w: &mut String, indent: usize) {
                 for _ in 0..indent {
@@ -800,6 +881,37 @@ mod regioncam {
                 }
             }
             Ok(())
+        }
+    
+        fn add_to<'py, B : NNBuilder>(&self, py: Python<'py>, net: &mut B, input_layer: Option<B::LayerNr>) -> PyResult<B::LayerNr> {
+            let input_layer = input_layer.unwrap_or(net.last_layer());
+            match self {
+                PyNNModule::Linear { weight, bias } => {
+                    let weight = weight.bind(py).readonly();
+                    let bias   = bias.bind(py).readonly();
+                    Ok(net.linear_at(input_layer, &weight.as_array(), &bias.as_array()))
+                }
+                PyNNModule::ReLU() => {
+                    net.relu_at(input_layer);
+                    Ok(net.last_layer())
+                }
+                PyNNModule::LeakyReLU { negative_slope } => {
+                    net.leaky_relu_at(input_layer, *negative_slope);
+                    Ok(net.last_layer())
+                }
+                PyNNModule::Residual { layer } => {
+                    let after_layer = layer.get().add_to(py, net, Some(input_layer))?;
+                    net.sum(input_layer, after_layer);
+                    Ok(net.last_layer())
+                }
+                PyNNModule::Sequential { layers } => {
+                    let mut input_layer = input_layer;
+                    for item in layers {
+                        input_layer = item.get().add_to(py, net, Some(input_layer))?;
+                    }
+                    Ok(input_layer)
+                }
+            }
         }
     }
 

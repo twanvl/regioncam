@@ -12,7 +12,7 @@ use crate::util::*;
 
 /// Trait for objects to which neural network layers can be added
 pub trait NNBuilder: Sized {
-    type LayerNr;
+    type LayerNr: Copy;
     /// Append a layer that computes output using the given function.
     /// The function should be linear, without a bias term.
     /// Then `add_bias` should add the bias term to the output.

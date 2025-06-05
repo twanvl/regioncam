@@ -395,7 +395,7 @@ impl Regioncam {
     /// Return a 1d slice of a 2d regioncam.
     /// The first layer will be a linear mapping from 1d to 2d.
     /// `plane` is a 1d hyperplane in the 2d space of the 2d regioncam (a line).
-    fn slice(&self, plane: &Plane1D) -> Regioncam1D {
+    pub fn slice(&self, plane: &Plane1D) -> Regioncam1D {
         // signed distance to plane at each vertex
         let distance_to_plane = plane.perpendicular().project(&self.inputs().view());
         assert_eq!(distance_to_plane.shape(), [self.num_vertices(), 1]);
