@@ -7,6 +7,10 @@
 ### Added
 
 * Added `Regioncam1D`, `Plane1D`
+* Added python interface for `Regioncam1D`
+* Added `slice` method that extracts a 1d slice from a 2d regioncam
+* Added `Regioncam.show` method to python interface that returns a rendered png image,
+  this allows regioncam objects to be garbage collected in jupyter notebooks.
 
 ### Changed
 

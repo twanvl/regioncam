@@ -7,7 +7,7 @@ use ndarray::{Axis, Dim, Dimension, CowArray};
 use numpy::*;
 use pyo3::prelude::*;
 use pyo3::exceptions::{PyAttributeError, PyIndexError, PyValueError};
-use pyo3::types::{PyDict, PyList, PyString, PyTuple};
+use pyo3::types::{PyDict, PyList, PyString, PyTuple, PyBytes};
 use pyo3::{intern, PyClass, DowncastError, PyTraverseError, PyVisit};
 
 use ::regioncam::*;
@@ -278,6 +278,24 @@ mod regioncam {
             })
         }
 
+        /// Visualize the regions, returns an object that can be shown in a jupyter notebook.
+        /// 
+        /// In jupyter notebooks it is important to use `rc.show()` or `IPython.display.display(rc)`,
+        /// instead of ending a cell with a regioncam object,
+        /// because the latter prevents the regioncam from ever being garbage collected.
+        ///
+        /// Parameters:
+        ///  * *format options*:   See set_format.
+        #[cfg(feature = "repr_png")]
+        #[pyo3(signature=(**kwargs))]
+        fn show(&self, kwargs: Option<&Bound<'_, PyDict>>, py: Python<'_>) -> PyResult<PngImage> {
+            self.render(kwargs, |renderer| {
+                let data = renderer.encode_png().map_err(png_error_to_py_error)?;
+                let data = PyBytes::new(py, &data).unbind();
+                Ok(PngImage { data })
+            })
+        }
+
         /// Set rendering options
         /// 
         /// Parameters:
@@ -493,7 +511,7 @@ mod regioncam {
     }
 
     /// A vertex in a regioncam
-    #[pyclass]
+    #[pyclass(name="Vertex")]
     pub struct PyVertex {
         rc: Py<PyRegioncam>,
         vertex: Vertex,
@@ -546,7 +564,7 @@ mod regioncam {
     }
 
     /// A vertex in a regioncam
-    #[pyclass]
+    #[pyclass(name="Edge")]
     pub struct PyEdge {
         rc: Py<PyRegioncam>,
         edge: Edge,
@@ -601,7 +619,7 @@ mod regioncam {
     }
 
     /// A layer in a regioncam
-    #[pyclass]
+    #[pyclass(name="Layer")]
     pub struct PyLayer {
         rc: Py<PyRegioncam>,
         layer: LayerNr,
@@ -630,6 +648,35 @@ mod regioncam {
         }
     }
     
+    /// A png image.
+    /// 
+    /// This is used for the output of Regioncam.show(), so the regioncam can be garbage collected.
+    #[cfg(feature = "repr_png")]
+    #[pyclass]
+    pub struct PngImage {
+        data: Py<PyBytes>,
+    }
+    #[pymethods]
+    impl PngImage {
+        fn _repr_png_(&self, py: Python<'_>) -> Py<PyBytes> {
+            self.data.clone_ref(py)
+        }
+        #[getter]
+        fn data(&self, py: Python<'_>) -> Py<PyBytes> {
+            self.data.clone_ref(py)
+        }
+        /// Write this image to an png file.
+        ///
+        /// Parameters:
+        ///  * path:              path of the file to write to
+        #[cfg(feature = "png")]
+        fn write_png(&self, py: Python<'_>, path: &str) -> PyResult<()> {
+            let data = self.data.bind(py);
+            std::fs::write(path, data.as_bytes())?;
+            Ok(())
+        }
+    }
+
     // Collections
 
     /// Wrap an indexable collection as a Python sequence
@@ -667,8 +714,7 @@ mod regioncam {
 
     
     // A 1d regioncam
-    #[pyclass]
-    #[pyo3(name="Regioncam1D")]
+    #[pyclass(name="Regioncam1D")]
     struct PyRegioncam1D {
         regioncam: Regioncam1D,
         //plane: Option<Py<PyPlane1D>>,
