@@ -11,6 +11,7 @@
 * Added `slice` method that extracts a 1d slice from a 2d regioncam
 * Added `Regioncam.show` method to python interface that returns a rendered png image,
   this allows regioncam objects to be garbage collected in jupyter notebooks.
+* Added `edge_length` and `face_area` (exposed as Edge.length and Face.area in python)
 
 ### Changed
 

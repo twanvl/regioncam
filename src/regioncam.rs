@@ -201,7 +201,10 @@ impl Regioncam {
     pub fn vertex_inputs(&self, vertex: Vertex) -> ArrayView1<f32> {
         self.layers[0].vertex_data.row(vertex.index())
     }
-    pub fn face_activations_at(&self, layer: usize) -> &Array3<f32> {
+    pub fn vertex_activations_at(&self, layer: LayerNr, vertex: Vertex) -> ArrayView1<f32> {
+        self.layers[layer].vertex_data.row(vertex.index())
+    }
+    pub fn face_activations_at(&self, layer: LayerNr) -> &Array3<f32> {
         &self.layers[layer].face_data
     }
     pub fn face_activations(&self) -> &Array3<f32> {
@@ -241,13 +244,13 @@ impl Regioncam {
     pub fn halfedge_on_face(&self, face: Face) -> Halfedge {
         self.partition.halfedge_on_face(face)
     }
-    pub fn face_centroid_at(&self, layer: usize, face: Face) -> Array1<f32> {
+    pub fn face_centroid_at(&self, layer: LayerNr, face: Face) -> Array1<f32> {
         self.vertex_data_for_face(face, layer).mean_axis(Axis(0)).unwrap()
     }
     pub fn face_centroid(&self, face: Face) -> Array1<f32> {
         self.face_centroid_at(0, face)
     }
-    pub fn face_activation_for(&self, layer: usize, face: Face, inputs: ArrayView1<f32>) -> Array1<f32> {
+    pub fn face_activation_for(&self, layer: LayerNr, face: Face, inputs: ArrayView1<f32>) -> Array1<f32> {
         let face_data = self.layers[layer].face_data.index_axis(Axis(0), face.index());
         let inputs = concatenate![Axis(0), inputs, Array1::ones(1)];
         inputs.dot(&face_data)
@@ -267,8 +270,40 @@ impl Regioncam {
         self.layers[layer].hash_face(face, &mut hasher);
         hasher.finish()
     }
-    pub fn layer(&self, layer: usize) -> &Layer {
+    pub fn layer(&self, layer: LayerNr) -> &Layer {
         &self.layers[layer]
+    }
+    /// Compute the length of an edge in the input space
+    pub fn edge_length_at(&self, layer: LayerNr, edge: Edge) -> f32 {
+        let (a,b) = self.endpoints(edge);
+        let va = self.vertex_activations_at(layer, a);
+        let vb = self.vertex_activations_at(layer, b);
+        norm(&(&va - &vb))
+    }
+    pub fn edge_length(&self, edge: Edge) -> f32 {
+        self.edge_length_at(0, edge)
+    }
+    pub fn face_area(&self, face: Face) -> f32 {
+        fn cross(v0: ArrayView1<f32>, v1: ArrayView1<f32>, v2: ArrayView1<f32>) -> f32 {
+            debug_assert_eq!(v0.len(), 2);
+            debug_assert_eq!(v1.len(), 2);
+            debug_assert_eq!(v2.len(), 2);
+            let a0 = v1[0] - v0[0];
+            let a1 = v1[1] - v0[1];
+            let b0 = v2[0] - v0[0];
+            let b1 = v2[1] - v0[1];
+            return a0 * b1 - a1 * b0;
+        }
+        let vertex_data = &self.layers[0].vertex_data;
+        let mut vertices = self.vertices_on_face(face);
+        let v0 = vertices.next().unwrap();
+        let mut v1 = vertices.next().unwrap();
+        let mut sum = 0.0;
+        for v2 in vertices {
+            sum += cross(vertex_data.row(v0.index()), vertex_data.row(v1.index()), vertex_data.row(v2.index()));
+            v1 = v2;
+        }
+        sum.abs() * 0.5
     }
 
     // Iterators

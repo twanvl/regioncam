@@ -477,7 +477,6 @@ mod regioncam {
             let pyrc = self.rc.bind(py);
             let rc = pyrc.borrow();
             let vertices = rc.regioncam.vertices_on_face(self.face);
-            //let vertices = vertices.map(|vertex| PyVertex{ rc: pyrc.clone().unbind(), vertex});
             let vertices = vertices.map(|vertex| PyVertex{ rc: self.rc.clone_ref(py), vertex});
             PyList::new(py, vertices.collect::<Vec<_>>())
         }
@@ -504,6 +503,12 @@ mod regioncam {
         fn outputs<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
             let rc = self.rc.borrow(py);
             self.activations(py, rc.regioncam.last_layer())
+        }
+        /// Area of this face in the input space
+        #[getter]
+        fn area<'py>(&self, py: Python<'py>) -> f32 {
+            let rc: PyRef<'_, PyRegioncam> = self.rc.borrow(py);
+            rc.regioncam.face_area(self.face)
         }
         fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
             visit.call(&self.rc)
@@ -601,6 +606,16 @@ mod regioncam {
             let rc: PyRef<'_, PyRegioncam> = self.rc.borrow(py);
             let decision_boundary_layer = rc.regioncam.last_layer();
             rc.regioncam.edge_label(self.edge).layer == decision_boundary_layer
+        }
+        /// Length of this edge in the input space
+        #[getter]
+        fn length<'py>(&self, py: Python<'py>) -> f32 {
+            let rc: PyRef<'_, PyRegioncam> = self.rc.borrow(py);
+            rc.regioncam.edge_length(self.edge)
+        }
+        fn length_at<'py>(&self, py: Python<'py>, layer: usize) -> f32 {
+            let rc: PyRef<'_, PyRegioncam> = self.rc.borrow(py);
+            rc.regioncam.edge_length_at(layer, self.edge)
         }
         /// In which layer was this edge added?
         #[getter]
