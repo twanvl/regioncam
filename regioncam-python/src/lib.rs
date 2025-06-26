@@ -43,7 +43,7 @@ mod regioncam {
         fn circle(radius: f32) -> Self {
             Self { regioncam: Regioncam::circle(radius), plane: None, render_options: RenderOptions::default(), marked_points: vec![] }
         }
-        /// Create a Regioncam object for a plane through the given points.
+        /// Create a Regioncam for a plane through the given points.
         #[staticmethod]
         #[pyo3(signature=(points, labels=vec![], colors=vec![], size=1.5))]
         fn through_points<'py>(
@@ -713,7 +713,7 @@ mod regioncam {
     declare_pysequence!(Layers, num_layers, PyLayer, (|rc, index| PyLayer { rc, layer: index }));
 
     
-    // A 1d regioncam
+    /// A 1D regioncam
     #[pyclass(name="Regioncam1D")]
     struct PyRegioncam1D {
         regioncam: Regioncam1D,
@@ -728,7 +728,7 @@ mod regioncam {
         fn from(size: SizeArg1D) -> Self {
             match size {
                 SizeArg1D::Range(a, b) => a..b,
-                SizeArg1D::Size(size) => -size..size,
+                SizeArg1D::Size(size) => -size*0.5 .. size*0.5,
             }
         }
     }
@@ -740,6 +740,17 @@ mod regioncam {
             Self {
                 regioncam: Regioncam1D::new(size.into())
             }
+        }
+        /// Create a Regioncam1D for a line through the given points.
+        #[staticmethod]
+        #[pyo3(signature=(points, size=1.5))]
+        fn through_points<'py>(
+                #[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>,
+                size: f32,
+        ) -> PyResult<Self> {
+            let plane = Plane1D::through_points(&points.readonly().as_array());
+            let regioncam = Regioncam1D::from_plane(&plane, size);
+            Ok(Self { regioncam })
         }
         
         /// The number of vertices in the partition.

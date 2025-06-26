@@ -67,6 +67,14 @@ impl Regioncam1D {
             vertex_label: vec![VertexLabel::default(); 2],
         }
     }
+    pub fn from_size(size: f32) -> Self {
+        Self::new(-size*0.5 .. size*0.5)
+    }
+    pub fn from_plane(plane: &Plane1D, size: f32) -> Self {
+        let mut out = Self::from_size(plane.size() * size);
+        out.add(&plane.mapping);
+        out
+    }
 
     pub fn num_vertices(&self) -> usize {
         self.vertices.len()
