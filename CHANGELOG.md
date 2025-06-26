@@ -2,7 +2,10 @@
 
 ## [Unreleased]
 
-## 0.5.0 - (unreleased)
+### Added
+
+
+## 0.5.0 - 2025-06-26
 
 ### Added
 
@@ -12,6 +15,7 @@
 * Added `Regioncam.show` method to python interface that returns a rendered png image,
   this allows regioncam objects to be garbage collected in jupyter notebooks.
 * Added `edge_length` and `face_area` (exposed as Edge.length and Face.area in python)
+* Added Vertex.incident_edges and Face.edges to python interface.
 
 ### Changed
 

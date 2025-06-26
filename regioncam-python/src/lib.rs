@@ -480,6 +480,15 @@ mod regioncam {
             let vertices = vertices.map(|vertex| PyVertex{ rc: self.rc.clone_ref(py), vertex});
             PyList::new(py, vertices.collect::<Vec<_>>())
         }
+        /// The list of edges that make up this face
+        #[getter]
+        fn edges<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+            let pyrc = self.rc.bind(py);
+            let rc = pyrc.borrow();
+            let halfedges = rc.regioncam.halfedges_on_face(self.face);
+            let edges = halfedges.map(|he| PyEdge{ rc: self.rc.clone_ref(py), edge: he.edge() });
+            PyList::new(py, edges.collect::<Vec<_>>())
+        }
         /// Ids of all vertices that make up this face
         #[getter]
         fn vertex_ids<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<usize>> {
@@ -528,6 +537,14 @@ mod regioncam {
         }
         fn __repr__(&self) -> String {
             format!("Vertex({})", self.vertex.index())
+        }
+        #[getter]
+        fn incident_edges<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+            let pyrc = self.rc.bind(py);
+            let rc = pyrc.borrow();
+            let halfedges = rc.regioncam.halfedges_leaving_vertex(self.vertex);
+            let edges = halfedges.map(|he| PyEdge{ rc: self.rc.clone_ref(py), edge: he.edge() });
+            PyList::new(py, edges.collect::<Vec<_>>())
         }
         /// Values at a given layer
         fn activations<'py>(&self, py: Python<'py>, layer: usize) -> Bound<'py, PyArray1<f32>> {
