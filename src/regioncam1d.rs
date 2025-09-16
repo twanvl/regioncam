@@ -450,7 +450,7 @@ impl Regioncam {
                             row.assign(&layer.vertices().row(v.index()));
                         }
                         IndexOrLerp::Lerp(_, a, b, t) => {
-                            if layer.continuous() {
+                            if layer.is_continuous() {
                                 row.assign(&lerp(&layer.vertices().row(a.index()),  &layer.vertices().row(b.index()), *t));
                             } else {
                                 // for discrete layers: don't interpolate
@@ -460,7 +460,7 @@ impl Regioncam {
                         }
                     };
                 }
-                Layer1D{ vertex_data, continuous: layer.continuous() }
+                Layer1D{ vertex_data, continuous: layer.is_continuous() }
             }))
             .collect();
         // collect vertex labels

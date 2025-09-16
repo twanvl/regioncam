@@ -217,7 +217,7 @@ impl<'a> Renderer<'a> {
             let mut color = Color::new(0.5, 0.8, 1.0);
             let mut first = true;
             for layer in 0..self.regioncam.num_layers() {
-                if self.regioncam.layer(layer).has_activations() {
+                if self.regioncam.layer(layer).is_nonlinear() {
                     // Color based on face hash
                     let hash = self.regioncam.face_hash_at(layer, face);
                     let face_layer_color = Color::from_hash(hash);

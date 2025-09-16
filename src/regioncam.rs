@@ -41,7 +41,7 @@ pub struct Layer {
 }
 
 impl Layer {
-    pub fn continuous(&self) -> bool {
+    pub fn is_continuous(&self) -> bool {
         self.continuous
     }
     pub fn vertices(&self) -> &Array2<f32> {
@@ -50,7 +50,7 @@ impl Layer {
     pub fn faces(&self) -> &Array3<f32> {
         &self.face_data
     }
-    pub fn has_activations(&self) -> bool {
+    pub fn is_nonlinear(&self) -> bool {
         match self.layer_type {
             LayerType::Input => false,
             LayerType::Linear => false,
@@ -198,10 +198,10 @@ impl Regioncam {
     pub fn inputs(&self) -> &Array2<f32> {
         &self.layers[0].vertex_data
     }
-    pub fn vertex_inputs(&self, vertex: Vertex) -> ArrayView1<f32> {
+    pub fn vertex_inputs(&self, vertex: Vertex) -> ArrayView1<'_, f32> {
         self.layers[0].vertex_data.row(vertex.index())
     }
-    pub fn vertex_activations_at(&self, layer: LayerNr, vertex: Vertex) -> ArrayView1<f32> {
+    pub fn vertex_activations_at(&self, layer: LayerNr, vertex: Vertex) -> ArrayView1<'_, f32> {
         self.layers[layer].vertex_data.row(vertex.index())
     }
     pub fn face_activations_at(&self, layer: LayerNr) -> &Array3<f32> {
