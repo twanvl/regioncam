@@ -16,6 +16,10 @@ use ::regioncam::*;
 mod regioncam {
     use super::*;
 
+    #[pymodule_export]
+    #[allow(non_upper_case_globals)]
+    const __version__: &'static str = env!("CARGO_PKG_VERSION");
+
     #[pyclass]
     #[pyo3(name="Regioncam")]
     struct PyRegioncam {
@@ -47,9 +51,9 @@ mod regioncam {
         #[staticmethod]
         #[pyo3(signature=(points, labels=vec![], colors=vec![], size=1.5))]
         fn through_points<'py>(
-                #[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>,
+                #[pyo3(from_py_with=downcast_array)] points: Bound<'py, PyArray2<f32>>,
                 labels: Vec<String>,
-                #[pyo3(from_py_with="extract_colors")] colors: Vec<Color>,
+                #[pyo3(from_py_with=extract_colors)] colors: Vec<Color>,
                 size: f32,
         ) -> PyResult<Self> {
             let plane = Plane::through_points(&points.readonly().as_array());
@@ -76,9 +80,9 @@ mod regioncam {
         #[pyo3(signature=(points, labels=vec![], colors=vec![], project_to_plane=true))]
         fn mark_points<'py>(
                 &mut self,
-                #[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>,
+                #[pyo3(from_py_with=downcast_array)] points: Bound<'py, PyArray2<f32>>,
                 labels: Vec<String>,
-                #[pyo3(from_py_with="extract_colors")] colors: Vec<Color>,
+                #[pyo3(from_py_with=extract_colors)] colors: Vec<Color>,
                 project_to_plane: bool
         ) -> PyResult<()> {
             let py = points.py();
@@ -339,7 +343,7 @@ mod regioncam {
     #[derive(FromPyObject)]
     enum LineOrPoints<'py> {
         Line(Bound<'py, PyPlane1D>),
-        Points(#[pyo3(from_py_with="downcast_array")] Bound<'py, PyArray2<f32>>),
+        Points(#[pyo3(from_py_with=downcast_array)] Bound<'py, PyArray2<f32>>),
     }
 
     impl PyRegioncam {
@@ -427,13 +431,13 @@ mod regioncam {
         ///  * `bias`:         bias vector
         ///  * `input_layer``: use the output of the given layer as input (default: last layer).
         #[pyo3(signature=(weight, bias, input_layer=None))]
-        /*fn linear<'py>(&mut self, #[pyo3(from_py_with="downcast_array")] weight: PyReadonlyArray2<'py, f32>, bias: PyReadonlyArray1<'py, f32>, input_layer: Option<usize>) {
+        /*fn linear<'py>(&mut self, #[pyo3(from_py_with=downcast_array)] weight: PyReadonlyArray2<'py, f32>, bias: PyReadonlyArray1<'py, f32>, input_layer: Option<usize>) {
             let input_layer = input_layer.unwrap_or(self.partition.last_layer());
             self.partition.linear_at(input_layer, &weight.as_array(), &bias.as_array());
         }*/
         fn linear<'py>(&mut self,
-                #[pyo3(from_py_with="downcast_array")] weight: Bound<'py, PyArray2<f32>>,
-                #[pyo3(from_py_with="downcast_array")] bias: Bound<'py, PyArray1<f32>>,
+                #[pyo3(from_py_with=downcast_array)] weight: Bound<'py, PyArray2<f32>>,
+                #[pyo3(from_py_with=downcast_array)] bias: Bound<'py, PyArray1<f32>>,
                 input_layer: Option<usize>
             ) -> usize {
             let input_layer = input_layer.unwrap_or(self.regioncam.last_layer());
@@ -449,7 +453,7 @@ mod regioncam {
         /// Returns:
         ///  * layer number of the output
         #[pyo3(signature=(layer, input_layer=None))]
-        fn add<'a,'py>(&mut self, py: Python<'py>, #[pyo3(from_py_with="nn::to_layer")] layer: PyCow<'a, 'py, PyNNModule>, input_layer: Option<usize>) -> PyResult<usize> {
+        fn add<'a,'py>(&mut self, py: Python<'py>, #[pyo3(from_py_with=nn::to_layer)] layer: PyCow<'a, 'py, PyNNModule>, input_layer: Option<usize>) -> PyResult<usize> {
             layer.borrow().add_to(py, &mut self.regioncam, input_layer)
         }
     }}}
@@ -777,7 +781,7 @@ mod regioncam {
         #[staticmethod]
         #[pyo3(signature=(points, size=1.5))]
         fn through_points<'py>(
-                #[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>,
+                #[pyo3(from_py_with=downcast_array)] points: Bound<'py, PyArray2<f32>>,
                 size: f32,
         ) -> PyResult<Self> {
             let plane = Plane1D::through_points(&points.readonly().as_array());
@@ -833,20 +837,20 @@ mod regioncam {
             #[pymethods]
             impl $PyPlane {
                 #[new]
-                fn new<'py>(#[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>) -> Self {
+                fn new<'py>(#[pyo3(from_py_with=downcast_array)] points: Bound<'py, PyArray2<f32>>) -> Self {
                     let plane = $Plane::through_points(&points.readonly().as_array());
                     Self(plane)
                 }
                 #[staticmethod]
-                fn from_linear<'py>(#[pyo3(from_py_with="downcast_array")] weight: Bound<'py, PyArray2<f32>>, #[pyo3(from_py_with="downcast_array")] bias: Bound<'py, PyArray1<f32>>) -> Self {
+                fn from_linear<'py>(#[pyo3(from_py_with=downcast_array)] weight: Bound<'py, PyArray2<f32>>, #[pyo3(from_py_with=downcast_array)] bias: Bound<'py, PyArray1<f32>>) -> Self {
                     let plane = $Plane::from(::regioncam::nn::Linear{ weight: weight.to_owned_array(), bias: bias.to_owned_array() });
                     Self(plane)
                 }
 
-                fn forward<'py>(&self, #[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>) -> Bound<'py, PyArray2<f32>> {
+                fn forward<'py>(&self, #[pyo3(from_py_with=downcast_array)] points: Bound<'py, PyArray2<f32>>) -> Bound<'py, PyArray2<f32>> {
                     self.0.forward(&points.readonly().as_array()).to_pyarray(points.py())
                 }
-                fn inverse<'py>(&self, #[pyo3(from_py_with="downcast_array")] points: Bound<'py, PyArray2<f32>>) -> Bound<'py, PyArray2<f32>> {
+                fn inverse<'py>(&self, #[pyo3(from_py_with=downcast_array)] points: Bound<'py, PyArray2<f32>>) -> Bound<'py, PyArray2<f32>> {
                     self.0.project(&points.readonly().as_array()).to_pyarray(points.py())
                 }
                 #[getter]
@@ -1012,8 +1016,8 @@ mod regioncam {
         #[pyfunction]
         #[pyo3(name="Linear")]
         fn linear<'py>(
-                #[pyo3(from_py_with="downcast_array")] weight: Bound<'py, PyArray2<f32>>,
-                #[pyo3(from_py_with="downcast_array")] bias: Bound<'py, PyArray1<f32>>,
+                #[pyo3(from_py_with=downcast_array)] weight: Bound<'py, PyArray2<f32>>,
+                #[pyo3(from_py_with=downcast_array)] bias: Bound<'py, PyArray1<f32>>,
             ) -> PyNNModule {
             assert_eq!(weight.dims()[1], bias.dims()[0]);
             PyNNModule::Linear { weight: weight.unbind(), bias: bias.unbind() }
