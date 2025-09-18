@@ -431,9 +431,8 @@ impl Partition {
         if self.vertex_he[b.index()] == he1.into() {
             self.vertex_he[b.index()] = n0.into();
         }
-        // Remove face and (mark) edge as removed
+        // mark edge as removed
         self.mark_edge_invalid(edge);
-        self.unchecked_remove_face(face1);
 
         // We might have made a degenerate edge. We should remove it now
         // This happens when there were two or more edges between the faces
@@ -475,6 +474,10 @@ impl Partition {
         }
         remove_degenerate_edges(self, p0, face0);
         remove_degenerate_edges(self, p1, face0);
+
+        // Remove the unused face, do this only at the end, because this might also invalidate face0
+        self.unchecked_remove_face(face1);
+
         face1
     }
 

@@ -5,6 +5,16 @@
 ### Added
 
 
+## 0.5.1 - 2025-09-18
+
+### Changed
+
+* Fixed index out of bound error in `Partition::merge_faces`, when merging with the face with the last index.
+* Renamed `Linear::new` to `new_normal`, added `new` constructor
+* Renamed `Layer::has_activations` to `is_nonlinear`
+* Renamed `Layer::continuous` to `is_continuous`
+
+
 ## 0.5.0 - 2025-06-26
 
 ### Added
