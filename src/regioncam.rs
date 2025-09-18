@@ -837,10 +837,12 @@ trait EdgeSplitter {
 #[cfg(test)]
 mod test {
     use std::f32::consts::TAU;
+    use std::fs::File;
 
     use ndarray::{stack, Array1};
     use rand::Rng;
     use rand::{rngs::SmallRng, SeedableRng};
+    use ndarray_npz::NpzReader;
 
     use super::*;
 
@@ -1108,24 +1110,24 @@ mod test {
 
     #[test]
     fn max_pool_triangles() {
-        let mut p = test_case_triangles(5);
-        p.check_invariants();
-        p.max_pool();
-        p.check_invariants();
-        println!("{} faces", p.num_faces());
+        let mut rc = test_case_triangles(5);
+        rc.check_invariants();
+        rc.max_pool();
+        rc.check_invariants();
+        println!("{} faces", rc.num_faces());
     }
 
     // Test case that gave "Face has inconsistent argmax" error
     #[test]
     fn error_case_1() {
-        let mut p = Regioncam::square(2.0);
-        p.linear(&array![
+        let mut rc = Regioncam::square(2.0);
+        rc.linear(&array![
                 [-0.43146494, -1.0630932 , -0.75895   , -1.212125  ,  0.52904165],
                 [-1.1837014 ,  0.8460558 , -2.002247  ,  0.7702433 ,  1.5294473 ]].view(),
             &array![ 1.4554669 , -0.1446282 ,  0.63949215,  0.01911678, -0.13796857].view()
         );
-        p.relu();
-        p.linear(&array![
+        rc.relu();
+        rc.linear(&array![
                 [-0.31510666,  1.6690438 , -1.9769672 ],
                 [ 1.4305679 , -1.4525309 , -1.6842408 ],
                 [-1.501365  ,  1.7357037 , -1.4884815 ],
@@ -1133,10 +1135,33 @@ mod test {
                 [ 0.37124428, -1.8019046 ,  1.9643012 ]].view(),
                 &array![ 0.6519267, -0.5254144, -1.1940845].view()
         );
-        println!("{} faces", p.num_faces());
+        println!("{} faces", rc.num_faces());
         //println!("{p:?}");
-        p.decision_boundary();
-        p.check_invariants();
+        rc.decision_boundary();
+        rc.check_invariants();
+    }
+
+    // Test case that gave index out of bounds error
+    #[test]
+    #[ignore]
+    fn error_case_2() {
+        let mut data = NpzReader::new(File::open("test/error_case_2.npz").unwrap()).unwrap();
+        let points: Array2<f32> = data.by_name("points.npy").unwrap();
+        let linear_0 = crate::nn::Linear::new(
+            data.by_name("weight_0.npy").unwrap(),
+            data.by_name("bias_0.npy").unwrap()
+        );
+        let linear_2 = crate::nn::Linear::new(
+            data.by_name("weight_2.npy").unwrap(),
+            data.by_name("bias_2.npy").unwrap()
+        );
+        let mut rc = Regioncam::from_plane(&Plane::through_points(&points.view()), 1.5);
+        rc.add(&linear_0);
+        rc.add(&crate::nn::Module::ReLU);
+        rc.add(&linear_2);
+        rc.check_invariants();
+        rc.decision_boundary();
+        rc.check_invariants();
     }
 }
 

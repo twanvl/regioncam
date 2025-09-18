@@ -92,8 +92,14 @@ pub struct LinearBase<S: RawData<Elem=f32> + RawDataClone + Data> {
 
 pub type Linear = LinearBase<OwnedRepr<f32>>;
 
+impl<S: RawData<Elem=f32> + RawDataClone + Data> LinearBase<S> {
+    pub fn new(weight: ArrayBase<S, Ix2>, bias: ArrayBase<S, Ix1>) -> Self {
+        Self { weight, bias }
+    }
+}
+
 impl Linear {
-    pub fn new<R: Rng + ?Sized>(dim_in: usize, dim_out: usize, rng: &mut R) -> Linear {
+    pub fn new_normal<R: Rng + ?Sized>(dim_in: usize, dim_out: usize, rng: &mut R) -> Linear {
         let std = 1.0 / f32::sqrt(dim_in as f32);
         let distr = Normal::new(0.0, std).unwrap();
         Self::from_distr(dim_in, dim_out, distr, rng)
