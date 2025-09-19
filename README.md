@@ -47,7 +47,7 @@ Since this is a randomly initialized neural network, the linear regions are also
 Usage from python
 -----
 
-The python wrapper is intended to be the main way to use Regioncam, see [regioncam-python](https://github.com/twanvl/regioncam/regioncam-python) for the details.
+The python wrapper is intended to be the main way to use Regioncam, see [regioncam-python](https://github.com/twanvl/regioncam/tree/main/regioncam-python) for the details.
 
 Algorithm
 ---------
