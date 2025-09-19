@@ -4,6 +4,12 @@
 
 ### Added
 
+## 0.5.2 - 2025-09-19
+
+### Changes
+
+* Improved documentation, and added basic rust example
+
 
 ## 0.5.1 - 2025-09-18
 

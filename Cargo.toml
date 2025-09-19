@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [workspace.package]
-version = "0.5.1"
+version = "0.5.2"
 authors = ["Twan van Laarhoven <twanvl@gmail.com>"]
 description = "Visualize linear regions in neural networks"
 license = "MIT OR Apache-2.0"
