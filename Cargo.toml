@@ -4,11 +4,15 @@ edition = "2021"
 version.workspace = true
 authors.workspace = true
 description.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [workspace.package]
 version = "0.5.1"
 authors = ["Twan van Laarhoven <twanvl@gmail.com>"]
 description = "Visualize linear regions in neural networks"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/twanvl/regioncam/"
 
 [workspace]
 members = [

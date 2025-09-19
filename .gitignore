@@ -2,5 +2,8 @@
 .venv
 .vscode
 /target
+/ideas
 *.data
 *.old
+*.whl
+

@@ -2,16 +2,14 @@ Regioncam - visualize linear regions in neural networks
 =========
 
 Regioncam is a rust library and python package for visualizing linear regions in a neural network.
-Regioncam works by tracking the output of all neural network layers in the regions where these outputs are linear. The inputs are in a 2 dimensional space.
+Regioncam works by tracking the output of all neural network layers in the regions where these outputs are linear. The inputs are in a 1 or 2 dimensional space.
 
-Compiling
+Compiling python interface
 ---------
 
 Compiling the Regioncam python bindings requires rust and [`maturin`](https://github.com/PyO3/maturin).
 ```sh
-cd regioncam-python
-maturin develop --release
-python
+pip install ./regioncam-python
 ```
 
 Usage of python interface
@@ -69,7 +67,7 @@ The following layer types are supported:
 Algorithm
 ---------
 
-Regioncam similar to [Splinecam](https://github.com/AhmedImtiazPrio/splinecam/), but the algorithm is different.
+Regioncam is similar to [Splinecam](https://github.com/AhmedImtiazPrio/splinecam/), but the algorithm is different.
 
 Regioncam maintains a [halfedge datastructure](https://en.wikipedia.org/wiki/Doubly_connected_edge_list) of linear regions, which is updated when a piecewise activation function is applied.
 It also stores the activations $x^{(l)}$ for every vertex on every layer.
