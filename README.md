@@ -4,65 +4,50 @@ Regioncam - visualize linear regions in neural networks
 Regioncam is a rust library and python package for visualizing linear regions in a neural network.
 Regioncam works by tracking the output of all neural network layers in the regions where these outputs are linear. The inputs are in a 1 or 2 dimensional space.
 
-Compiling python interface
----------
-
-Compiling the Regioncam python bindings requires rust and [`maturin`](https://github.com/PyO3/maturin).
-```sh
-pip install ./regioncam-python
-```
-
-Usage of python interface
+Usage from rust
 -----
 
-```python
-import regioncam
-import numpy as np
+```rust
+use std::fs::File;
+use rand::prelude::*;
+use regioncam::{NNBuilder, Regioncam, RenderOptions, nn::Linear};
 
-# Create a regioncam object, with the region [-1..1]^2
-rc = regioncam.Regioncam(size=1)
-# Apply a linear layer
-rng = np.random.default_rng()
-weight = rng.standard_normal((2, 30), dtype=np.float32)
-bias = rng.standard_normal((30,), dtype=np.float32)
-rc.linear(weight, bias)
-# Apply a relu activation function
-rc.relu()
-# Write to svg
-rc.write_svg("example.svg")
-# Inspect regions
-print(f"Created {rc.num_faces} regions")
-for face in rc.faces:
-    print(face.vertex_ids)
+fn main() -> std::io::Result<()> {
+    // Create a regioncam object, with the region [-1..1]^2
+    let mut rc = Regioncam::square(1.0);
+    // Apply a linear layer
+    let mut rng = SmallRng::seed_from_u64(42);
+    let layer1 = Linear::new_uniform(2, 30, &mut rng);
+    rc.add(&layer1);
+    // Apply a relu activation function
+    rc.relu();
+    // Write to an svg file
+    let render_options = RenderOptions::default();
+    let mut file = File::create("example.svg")?;
+    rc.write_svg(&render_options, &mut file)?;
+    // Inspect regions
+    println!("Created {} regions", rc.num_faces());
+    println!("Face with the most edges has {} edges",
+        rc.faces().map(|face| rc.vertices_on_face(face).count()).max().unwrap()
+    );
+    Ok(())
+}
 ```
 
-Produces:  
+Produces the output
+```
+Created 169 regions
+Face with the most edges has 7 edges
+```
+And creates the following svg file:   
 <img src="example.svg" alt="drawing" width="300"/>
 
-Note: Weights and biases must be numpy arrays or torch tensors with dtype float32.
+Since this is a randomly initialized neural network, the linear regions are also placed randomly.
 
-Regioncam has limited support for torch nn layers:
+Usage from python
+-----
 
-```python
-net = torch.nn.Sequential(
-    torch.nn.Linear(2,30),
-    torch.nn.ReLU(),
-    torch.nn.Linear(30,30),
-    torch.nn.ReLU(),
-)
-rc.add(net)
-```
-
-See `examples/` for an example of visualizing a trained torch network.
-
-The following layer types are supported:
-* ReLU
-* LeakyReLU
-* Linear
-* Sequential
-* Identity
-* Dropout (treated as Identity)
-* residual
+The python wrapper is intended to be the main way to use Regioncam, see [regioncam-python](https://github.com/twanvl/regioncam/regioncam-python) for the details.
 
 Algorithm
 ---------
@@ -84,4 +69,5 @@ For max pooling activations:
  * Split faces by adding interior edges between vertices with the same argmax.
  * We again do this one dimension at a time, keeping track of the maximum for all pooled dimensions so far.
  * This can result in adding unecessary vertices and edges. These are then cleaned up afterwards by merging faces with the same argmax.
- 
+
+When rendering images, the color of each face is based on a hash of the activation pattern. This means that the colors remain stable during training.
